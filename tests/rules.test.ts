@@ -69,6 +69,24 @@ describe("Tier 1 Rules", () => {
     });
   });
 
+  // === Google OAuth ===
+  describe("google-oauth-client-secret", () => {
+    it("detects Google OAuth client secret", () => {
+      const findings = scanContent(
+        'CLIENT_SECRET=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',
+        "test.env",
+      );
+      expect(findings.some((f) => f.ruleId === "google-oauth-client-secret")).toBe(true);
+    });
+    it("does not match non-GOCSPX prefix", () => {
+      const findings = scanContent(
+        'CLIENT_SECRET=NOTGOCSPX-something',
+        "test.env",
+      );
+      expect(findings.some((f) => f.ruleId === "google-oauth-client-secret")).toBe(false);
+    });
+  });
+
   // === Slack ===
   describe("slack-webhook", () => {
     it("detects Slack webhook URL", () => {

@@ -73,6 +73,23 @@ export const TIER1_RULES: Rule[] = [
     secretGroup: 1,
     severity: "high",
   },
+  // === Google OAuth ===
+  {
+    id: "google-oauth-client-secret",
+    description: "Google OAuth Client Secret",
+    regex: /(?:^|[^A-Za-z0-9_-])(GOCSPX-[A-Za-z0-9_-]{28,})(?:$|[^A-Za-z0-9_-])/,
+    keywords: ["gocspx-"],
+    secretGroup: 1,
+    severity: "critical",
+  },
+  {
+    id: "google-oauth-refresh-token",
+    description: "Google OAuth Refresh Token",
+    regex: /(?:^|[^A-Za-z0-9_-])(1\/\/[0-9A-Za-z_-]{40,})(?:$|[^A-Za-z0-9_-])/,
+    keywords: ["1//"],
+    secretGroup: 1,
+    severity: "high",
+  },
   // === Slack ===
   {
     id: "slack-bot-token",
