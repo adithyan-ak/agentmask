@@ -1,0 +1,9 @@
+# gitleaks config for agentmask
+# Test files contain intentional fake secrets for testing the detection engine.
+
+[allowlist]
+description = "Test fixtures and test files contain intentional fake secrets"
+paths = [
+  '''tests/.*''',
+  '''src/scanner/entropy\.ts''',
+]
