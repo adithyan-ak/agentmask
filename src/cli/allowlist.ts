@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseTOML, stringify as stringifyTOML } from "smol-toml";
+import { removeFromBlocklist } from "../hooks/blocklist.js";
 
 const CONFIG_FILE = ".agentmask.toml";
 
@@ -59,6 +60,12 @@ export async function runAllowPath(pattern: string): Promise<void> {
   saveConfig(config);
   console.log(`Allowlisted path: "${pattern}"`);
   console.log(`Saved to ${CONFIG_FILE}`);
+
+  // Also remove from dynamic blocklist if present
+  const cwd = process.cwd();
+  if (removeFromBlocklist(pattern, cwd)) {
+    console.log(`Removed "${pattern}" from blocklist.`);
+  }
 }
 
 export async function runAllowValue(value: string): Promise<void> {

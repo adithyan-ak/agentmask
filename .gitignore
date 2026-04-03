@@ -5,4 +5,6 @@ dist/
 .env.*
 !.env.example
 tests/integration-workspace/
+tests/blocklist-workspace/
 PLAN.md
+.claude/agentmask-blocklist.json

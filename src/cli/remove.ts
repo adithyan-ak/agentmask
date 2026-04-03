@@ -35,6 +35,13 @@ export async function runRemove(): Promise<void> {
     }
   }
 
+  // Remove blocklist
+  const blocklistFile = join(settingsDir, "agentmask-blocklist.json");
+  if (existsSync(blocklistFile)) {
+    unlinkSync(blocklistFile);
+    console.log("  Blocklist removed: .claude/agentmask-blocklist.json");
+  }
+
   // Remove rules file
   const rulesFile = join(settingsDir, "rules", "agentmask.md");
   if (existsSync(rulesFile)) {
