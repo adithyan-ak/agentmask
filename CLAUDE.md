@@ -4,35 +4,43 @@
 
 agentmask is an open-source secrets firewall for AI coding agents. It prevents Claude Code (and eventually other AI assistants) from reading, leaking, or committing secrets like API keys, tokens, passwords, and connection strings.
 
-## Architecture — Three Reinforcing Layers
+**agentmask's value is the Claude Code integration layer** — hooks, blocklist, MCP server, behavioral rules. Detection is delegated to [gitleaks](https://github.com/gitleaks/gitleaks) (150+ battle-tested rules). We don't maintain our own regex patterns.
+
+## Architecture
+
+```
+agentmask = Claude Code integration layer
+  ├── Scanner backend: gitleaks (150+ rules, auto-downloaded if not installed)
+  ├── Blocklist manager (built by gitleaks scan, queried by hooks)
+  ├── Hooks (pre-read, pre-write, pre-bash, post-scan)
+  ├── MCP server (safe_read, env_names, scan_file, scan_staged)
+  └── Behavioral rules (.claude/rules/agentmask.md)
+```
+
+### Three Reinforcing Layers
 
 ```
 Layer 1: BLOCK (PreToolUse hooks)
-  → Intercepts Read, Bash, Write, Edit tool calls
-  → Pre-read checks: static patterns (.env, *.pem) + dynamic blocklist
-  → Dynamic blocklist built by init scan + updated by post-scan at runtime
-  → Blocks access BEFORE secrets enter the model's context
-  → Blocks writing hardcoded secrets into source code
-  → Scans staged files before git commit
+  → Pre-read: static path patterns + dynamic blocklist lookup (no subprocess, <5ms)
+  → Pre-write: gitleaks scan on content via temp file (~200ms)
+  → Pre-bash: pattern match on commands + gitleaks scan on staged files for git commit
+  → Post-scan: gitleaks scan on tool output, warns + auto-adds to blocklist
 
 Layer 2: REDIRECT (MCP server)
-  → safe_read: returns file content with secrets redacted
+  → safe_read: reads file, uses gitleaks findings to redact secrets
   → env_names: lists .env variable names without values
-  → scan_file: explicit security scan of any file
-  → scan_staged: scan git staging area
+  → scan_file / scan_staged: explicit gitleaks scans
 
 Layer 3: INSTRUCT (.claude/rules/agentmask.md)
   → Behavioral rules telling the agent to prefer safe_read
   → Installed automatically by `agentmask init`
 ```
 
-All three layers are necessary. Without Layer 1, secrets enter context. Without Layer 2, Claude gets stuck after a block. Without Layer 3, Claude repeatedly tries blocked operations.
-
 ## The Blocklist System
 
 The key innovation is the **dynamic blocklist** (`.claude/agentmask-blocklist.json`):
 
-1. `agentmask init` scans the entire repo using Tier 1 rules (zero false positives)
+1. `agentmask init` runs `gitleaks dir .` on the entire repo
 2. Every file containing a detected secret is added to the blocklist
 3. Pre-read hook checks the blocklist on every Read call — blocked files never enter context
 4. Post-scan hook catches secrets in files NOT in the blocklist (new/modified files) and auto-adds them
@@ -46,25 +54,23 @@ The key innovation is the **dynamic blocklist** (`.claude/agentmask-blocklist.js
 src/
 ├── cli.ts                  # CLI entrypoint — Commander.js, 8 commands
 ├── cli/
-│   ├── scan.ts             # `agentmask scan` — file/directory/staged scanning
-│   ├── init.ts             # `agentmask init` — scans repo, builds blocklist, installs hooks + MCP + rules
+│   ├── scan.ts             # `agentmask scan` — delegates to gitleaks
+│   ├── init.ts             # `agentmask init` — gitleaks scan + blocklist + hooks + MCP + rules
 │   ├── remove.ts           # `agentmask remove` — clean uninstall including blocklist
 │   └── allowlist.ts        # `allow-path` (also removes from blocklist), `allow-value`
-├── scanner/
-│   ├── types.ts            # Rule, Finding, ScanResult, Config types
-│   ├── rules.ts            # Detection rules: TIER1_RULES, TIER2_RULES, ALL_RULES, STOPWORDS
-│   ├── entropy.ts          # Shannon entropy + secret classification heuristics
-│   ├── file-patterns.ts    # Blocked path globs, binary detection, allowlists
-│   ├── redact.ts           # Format-preserving redaction engine
-│   ├── scanner.ts          # Core scan orchestrator: scanContent, scanFile
+├── gitleaks/
+│   ├── binary.ts           # Find system gitleaks or auto-download from GitHub releases
+│   ├── runner.ts           # Subprocess wrapper: scanDir, scanFile, scanContent, scanStaged
 │   └── index.ts            # Barrel export
+├── scanner/
+│   └── file-patterns.ts    # Static blocked path globs (.env, *.pem, etc.), binary detection
 ├── hooks/
 │   ├── common.ts           # Hook I/O: readStdin, block(), allow(), safety timer
 │   ├── blocklist.ts        # Dynamic blocklist: load, save, query, add, remove
-│   ├── pre-read.ts         # Checks static patterns + dynamic blocklist → blocks or allows
-│   ├── pre-bash.ts         # Blocks bash secret access + pre-commit scanning
-│   ├── pre-write.ts        # Blocks writing hardcoded secrets to non-.env files
-│   └── post-scan.ts        # Scans tool output, warns + auto-adds to blocklist
+│   ├── pre-read.ts         # Static patterns + blocklist lookup → block or allow (no subprocess)
+│   ├── pre-bash.ts         # Command pattern match + gitleaks scanStaged on git commit
+│   ├── pre-write.ts        # gitleaks scanContent on content being written
+│   └── post-scan.ts        # gitleaks scanContent on tool output, warns + auto-blocklists
 ├── mcp/
 │   └── server.ts           # MCP server with 4 tools (uses @modelcontextprotocol/sdk)
 └── config/
@@ -74,37 +80,46 @@ src/
 
 ## Key Design Decisions
 
+- **gitleaks as the scanner** — we don't maintain detection rules. gitleaks has 150+ battle-tested rules. Auto-downloaded if not installed.
 - **TypeScript ESM** — same ecosystem as Claude Code and the MCP SDK
-- **No binary dependencies** — pure Node.js, runs everywhere Claude Code runs
-- **Graceful degradation** — hook crashes → exit 1 (allow), NEVER exit 2 (block). A bug in agentmask must never block the user's work.
-- **Hooks use exit code 2 to block, 0 to allow** — this is Claude Code's hook contract
+- **Graceful degradation** — hook crashes → exit 1 (allow), NEVER exit 2 (block). gitleaks subprocess failure → allow. A bug must never block the user's work.
+- **Pre-read is pure blocklist lookup** — no subprocess, no gitleaks call. <5ms. The blocklist was built at init time.
+- **Pre-write/post-scan shell out to gitleaks** — ~200ms per call, writes content to temp file, scans, cleans up
+- **Post-scan warns AND auto-blocklists** — first read of a new secret file leaks (unavoidable), every subsequent read is blocked
+- **Pre-write hook skips .env files** — they're expected to contain secrets
 - **4-second safety timeout** on every hook (Claude Code's limit is 5s)
-- **Init scan uses Tier 1 rules only** — zero false positives for blocklist building. Tier 2 generic rules are for reporting only.
-- **Format-preserving redaction** for connection strings — `postgresql://****:****@host:5432/db` not just `[REDACTED]`
-- **Pre-write hook skips .env files** — they're expected to contain secrets; blocking writes to them would break workflows
-- **Post-scan warns AND auto-blocklists** — first read of a new secret file leaks (unavoidable), but every subsequent read is blocked
 
-## Detection Engine
+## Gitleaks Integration
 
-### Tier 1 (30 rules) — Provider-specific, zero false positives
-Each has a known prefix or format: `AKIA*` (AWS), `ghp_*` (GitHub), `sk_live_*` (Stripe), `GOCSPX-*` (Google OAuth), `AIza*` (GCP), `xoxb-*` (Slack), `SG.*.*` (SendGrid), PEM headers, JWTs, connection strings, etc. **Used for blocklist building.**
+### Binary Management (`src/gitleaks/binary.ts`)
+1. Checks system PATH for `gitleaks`
+2. Checks cache at `~/.agentmask/bin/gitleaks`
+3. If neither found, downloads pinned version from GitHub releases
+4. Supports macOS (arm64/x64) and Linux (arm64/x64)
 
-### Tier 2 (1 rule) — Generic keyword→operator→value with entropy filtering
-Catches `api_key = "high_entropy_value"` patterns. Uses Shannon entropy threshold (3.5 bits/char) and a stopword list to reduce false positives. **Used for reporting only, NOT for blocklist.**
+### Runner (`src/gitleaks/runner.ts`)
+All functions return `GitleaksFinding[]` (parsed from gitleaks JSON output):
+- `scanDir(path)` — scans a directory
+- `scanFile(path)` — scans a single file
+- `scanContent(content, filename?)` — writes to temp file, scans, cleans up
+- `scanStaged(cwd)` — runs `gitleaks git --staged`
 
-### Adding a New Rule
-Add to `TIER1_RULES` in `src/scanner/rules.ts`:
-```ts
+### Gitleaks JSON Output Format
+```json
 {
-  id: "provider-secret-type",       // kebab-case, unique
-  description: "Provider Secret",    // human-readable, shown in output
-  regex: /pattern/,                  // must have a capture group for the secret
-  keywords: ["prefix"],              // lowercase, used for fast pre-filtering
-  secretGroup: 1,                    // which capture group is the secret value
-  severity: "critical",              // critical | high | medium | low
+  "RuleID": "stripe-access-token",
+  "Description": "Found a Stripe Access Token...",
+  "StartLine": 4,
+  "EndLine": 4,
+  "StartColumn": 13,
+  "EndColumn": 44,
+  "Match": "sk_live_...",
+  "Secret": "sk_live_...",
+  "File": "/path/to/file.ts",
+  "Entropy": 4.601410,
+  "Fingerprint": "..."
 }
 ```
-Then add a test in `tests/rules.test.ts` with one positive and one negative case.
 
 ## Build & Test
 
@@ -113,6 +128,8 @@ npm install                         # install dependencies
 npm run build                       # or: node node_modules/.bin/tsup
 npm test                            # or: node node_modules/.bin/vitest run
 ```
+
+Requires gitleaks installed (`brew install gitleaks`) for tests that involve scanning.
 
 Build output goes to `dist/`. The CLI entrypoint is `dist/cli.js`.
 
@@ -150,14 +167,12 @@ stopwords = ["EXAMPLE_KEY"]
 
 ## Test Fixtures
 
-`tests/fixtures/` contains intentional fake secrets for testing detection. These are allowlisted in `.gitleaks.toml`. When adding new test fixtures with secret-format strings, add the path to the gitleaks allowlist.
+`tests/fixtures/` contains intentional fake secrets for testing detection. These are allowlisted in `.gitleaks.toml`. When adding new test fixtures with secret-format strings, add the path to the gitleaks allowlist AND unblock on GitHub push protection.
 
 ## What's NOT Built Yet
 
-- HTTP hook mode (hooks call localhost MCP server instead of spawning process — would eliminate startup latency)
 - Cursor / Copilot / other IDE support
-- Secret validation (checking if a detected key is actually live)
-- ML-based classification for reducing Tier 2 false positives
 - CI/CD GitHub Actions workflow
 - npm publish automation
 - SessionStart hook to auto-rescan on new sessions
+- HTTP hook mode (hooks call running MCP server instead of spawning subprocess)

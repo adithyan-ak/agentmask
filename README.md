@@ -70,13 +70,11 @@ The blocklist (`.claude/agentmask-blocklist.json`) is the key to blocking secret
 
 ## Detection
 
-agentmask detects secrets using two tiers of rules:
+Detection is powered by [gitleaks](https://github.com/gitleaks/gitleaks) — **150+ battle-tested rules** covering AWS, GitHub, Stripe, Google, GCP, Slack, SendGrid, Shopify, OpenAI, Anthropic, GitLab, Twilio, PEM keys, JWTs, database connection strings, and many more providers.
 
-**Tier 1 — Provider-specific (zero false positives):**
-AWS keys (`AKIA...`), GitHub PATs (`ghp_...`), Stripe keys (`sk_live_...`), Google OAuth secrets (`GOCSPX-...`), GCP keys (`AIza...`), Slack tokens, SendGrid, Shopify, OpenAI, Anthropic, Vercel, npm, PyPI, PEM private keys, JWTs, database connection strings, and more. 30 rules. Used for blocklist building.
+agentmask auto-downloads gitleaks if it's not already installed. No detection rules to maintain — when gitleaks updates, agentmask benefits automatically.
 
-**Tier 2 — Generic keyword-anchored (entropy-filtered):**
-Catches `api_key = "..."`, `password = "..."`, `client_secret: "..."` patterns where the value has high entropy. Filtered by a stopword list to reduce false positives. Used for scanning/reporting only, not for blocklist.
+**Requires:** `gitleaks` (auto-installed) or `brew install gitleaks`
 
 ## Commands
 
