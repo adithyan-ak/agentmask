@@ -4,9 +4,16 @@
   "description": "Mask your secrets from AI coding agents. One command. Zero friction.",
   "type": "module",
   "main": "dist/index.js",
-  "types": "dist/index.d.ts",
   "bin": {
     "agentmask": "dist/cli.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/adithyan-ak/agentmask.git"
+  },
+  "homepage": "https://github.com/adithyan-ak/agentmask",
+  "bugs": {
+    "url": "https://github.com/adithyan-ak/agentmask/issues"
   },
   "scripts": {
     "build": "tsup",
@@ -23,18 +30,20 @@
     "ai",
     "llm",
     "mcp",
+    "gitleaks",
     "redaction",
     "env",
-    "agent"
+    "agent",
+    "firewall",
+    "hooks"
   ],
-  "author": "",
+  "author": "adithyan-ak",
   "license": "MIT",
   "engines": {
     "node": ">=20"
   },
   "files": [
     "dist",
-    "rules",
     "README.md",
     "LICENSE"
   ],
