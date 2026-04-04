@@ -35,7 +35,7 @@ agentmask init
 ```
 agentmask init
     │
-    ├── Scans entire repo for secrets (Tier 1 rules — zero false positives)
+    ├── Scans entire repo for secrets (gitleaks — 150+ rules)
     ├── .claude/agentmask-blocklist.json  ← files containing detected secrets
     ├── .claude/settings.local.json       ← PreToolUse + PostToolUse hooks
     ├── .claude/rules/agentmask.md        ← behavioral rules for Claude
@@ -49,8 +49,8 @@ PreToolUse hooks intercept every Read, Bash, Write, and Edit call. Pre-read chec
 When a read is blocked, Claude is directed to the `safe_read` MCP tool, which returns the file content with secrets replaced:
 
 ```
-DATABASE_URL=postgresql://****:****@db.example.com:5432/myapp
-API_KEY=[REDACTED:28_chars]
+DATABASE_URL=[REDACTED:generic-api-key]
+API_KEY=[REDACTED:stripe-access-token]
 DEBUG=true          ← non-secret values kept as-is
 PORT=3000           ← non-secret values kept as-is
 ```
@@ -62,7 +62,7 @@ A `.claude/rules/agentmask.md` file teaches Claude to prefer safe tools and neve
 
 The blocklist (`.claude/agentmask-blocklist.json`) is the key to blocking secrets before they enter context:
 
-- **Built at init time** — `agentmask init` scans every file in the repo using Tier 1 rules (provider-specific patterns with zero false positives)
+- **Built at init time** — `agentmask init` scans every file in the repo using gitleaks (150+ provider-specific rules)
 - **Updated at runtime** — if post-scan detects a secret in a file that wasn't in the blocklist, it's added automatically
 - **Checked on every read** — pre-read hook looks up the file in the blocklist before allowing the read
 - **Re-run `agentmask init`** anytime to rescan (e.g., after pulling new code)
