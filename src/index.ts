@@ -1,30 +1,29 @@
+// Gitleaks integration
 export {
-  scanContent,
+  getGitleaksBinary,
+  isGitleaksAvailable,
+  scanDir,
   scanFile,
-  scanFiles,
-  TIER1_RULES,
-  TIER2_RULES,
-  ALL_RULES,
-  truncateSecret,
-  isStopword,
-  shannonEntropy,
-  isLikelySecret,
+  scanContent,
+  scanStaged,
+  type GitleaksFinding,
+} from "./gitleaks/index.js";
+
+// Blocklist
+export {
+  loadBlocklist,
+  saveBlocklist,
+  isInBlocklist,
+  addToBlocklist,
+  removeFromBlocklist,
+} from "./hooks/blocklist.js";
+
+// File patterns (static blocked paths)
+export {
   isBlockedPath,
   isAllowlistedPath,
-  isBinaryFile,
   DEFAULT_BLOCKED_PATTERNS,
-  redactContent,
-  redactEnvLine,
-  redactConnectionString,
-} from "./scanner/index.js";
+} from "./scanner/file-patterns.js";
 
-export type {
-  Rule,
-  Finding,
-  ScanResult,
-  BlockedPathConfig,
-  AllowlistEntry,
-  AgentmaskConfig,
-} from "./scanner/index.js";
-
+// Config
 export { loadConfig, getAllowlistedPaths, getStopwords } from "./config/index.js";

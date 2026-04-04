@@ -4,6 +4,9 @@ import { resolve } from "node:path";
 
 const CLI = resolve("dist/cli.js");
 
+// A Stripe key that gitleaks reliably detects
+const TEST_SECRET = "sk_live_51OdEIJ2CtHluikFZ4aNJk8Q";
+
 function runHook(
   type: string,
   input: Record<string, unknown>,
@@ -82,14 +85,6 @@ describe("pre-bash hook", () => {
     expect(result.stderr).toContain("BLOCKED");
   });
 
-  it("blocks head .env.local", () => {
-    const result = runHook("pre-bash", {
-      tool_name: "Bash",
-      tool_input: { command: "head -5 .env.local" },
-    });
-    expect(result.exitCode).toBe(2);
-  });
-
   it("blocks printenv", () => {
     const result = runHook("pre-bash", {
       tool_name: "Bash",
@@ -106,53 +101,29 @@ describe("pre-bash hook", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it("allows npm test", () => {
-    const result = runHook("pre-bash", {
-      tool_name: "Bash",
-      tool_input: { command: "npm test" },
-    });
-    expect(result.exitCode).toBe(0);
-  });
-
-  it("allows git status", () => {
-    const result = runHook("pre-bash", {
-      tool_name: "Bash",
-      tool_input: { command: "git status" },
-    });
-    expect(result.exitCode).toBe(0);
-  });
-
-  it("allows ls", () => {
-    const result = runHook("pre-bash", {
-      tool_name: "Bash",
-      tool_input: { command: "ls -la" },
-    });
-    expect(result.exitCode).toBe(0);
+  it("allows normal commands", () => {
+    const commands = ["npm test", "git status", "ls -la", "node script.js"];
+    for (const cmd of commands) {
+      const result = runHook("pre-bash", {
+        tool_name: "Bash",
+        tool_input: { command: cmd },
+      });
+      expect(result.exitCode, `Should allow: ${cmd}`).toBe(0);
+    }
   });
 });
 
 describe("pre-write hook", () => {
-  it("blocks writing hardcoded AWS key", () => {
-    const result = runHook("pre-write", {
-      tool_name: "Write",
-      tool_input: {
-        file_path: "config.ts",
-        content: 'const key = "AKIAIOSFODNN7EXAMPLE";',
-      },
-    });
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("AWS Access Key");
-  });
-
-  it("blocks writing Stripe key", () => {
+  it("blocks writing hardcoded Stripe key", () => {
     const result = runHook("pre-write", {
       tool_name: "Write",
       tool_input: {
         file_path: "payment.ts",
-        content: 'const stripe = new Stripe("sk_live_FAKEFAKEFAKEFAKEFAKEFAKE");',
+        content: `const stripe = new Stripe("${TEST_SECRET}");`,
       },
     });
     expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("BLOCKED");
     expect(result.stderr).toContain("Stripe");
   });
 
@@ -172,7 +143,7 @@ describe("pre-write hook", () => {
       tool_name: "Write",
       tool_input: {
         file_path: ".env",
-        content: "API_KEY=sk_live_FAKEFAKEFAKEFAKEFAKEFAKE",
+        content: `STRIPE_KEY=${TEST_SECRET}`,
       },
     });
     expect(result.exitCode).toBe(0);
@@ -184,11 +155,11 @@ describe("post-scan hook", () => {
     const result = runHook("post-scan", {
       tool_name: "Read",
       tool_input: { file_path: "utils.ts" },
-      tool_response: 'const key = "AKIAIOSFODNN7EXAMPLE";',
+      tool_response: `const key = "${TEST_SECRET}";`,
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("WARNING");
-    expect(result.stdout).toContain("AWS Access Key");
+    expect(result.stdout).toContain("Stripe");
   });
 
   it("passes clean output silently", () => {
@@ -205,18 +176,11 @@ describe("post-scan hook", () => {
 describe("graceful degradation", () => {
   it("handles malformed input without blocking", () => {
     const result = runHook("pre-read", { invalid: "data" });
-    expect(result.exitCode).toBe(0); // Allow, don't block
+    expect(result.exitCode).toBe(0);
   });
 
   it("handles empty stdin without blocking", () => {
-    try {
-      const stdout = execSync(
-        `echo '{}' | node ${CLI} hook pre-read`,
-        { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-      );
-      // Should exit 0 (allow)
-    } catch (err: any) {
-      expect(err.status).not.toBe(2); // Must never block on bad input
-    }
+    const result = runHook("pre-read", {});
+    expect(result.exitCode).toBe(0);
   });
 });

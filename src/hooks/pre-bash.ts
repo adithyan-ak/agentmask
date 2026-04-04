@@ -1,8 +1,5 @@
 import { readStdin, block, allow, startSafetyTimer } from "./common.js";
-import { isBlockedPath, DEFAULT_BLOCKED_PATTERNS } from "../scanner/file-patterns.js";
-import { scanContent } from "../scanner/scanner.js";
-import { execSync } from "node:child_process";
-import { resolve } from "node:path";
+import { scanStaged } from "../gitleaks/runner.js";
 
 startSafetyTimer();
 
@@ -10,14 +7,12 @@ startSafetyTimer();
  * Patterns that indicate direct reading of secret files via bash.
  */
 const FILE_READ_PATTERNS = [
-  // cat/head/tail/less/more/bat reading .env files
   /\b(?:cat|head|tail|less|more|bat)\s+.*\.env\b/,
   /\b(?:cat|head|tail|less|more|bat)\s+.*credentials\.json\b/,
   /\b(?:cat|head|tail|less|more|bat)\s+.*\.pem\b/,
   /\b(?:cat|head|tail|less|more|bat)\s+.*\.key\b/,
   /\b(?:cat|head|tail|less|more|bat)\s+.*id_rsa\b/,
   /\b(?:cat|head|tail|less|more|bat)\s+.*id_ed25519\b/,
-  // sourcing .env files
   /\bsource\s+.*\.env\b/,
   /\.\s+.*\.env\b/,
 ];
@@ -67,66 +62,26 @@ async function main() {
     }
   }
 
-  // Category C: Git commit — scan staged files for secrets
+  // Category C: Git commit — scan staged files with gitleaks
   if (GIT_COMMIT_PATTERN.test(command)) {
     const cwd = input.cwd ?? process.cwd();
-    const secretsInStaged = scanStagedFiles(cwd);
-    if (secretsInStaged.length > 0) {
-      const details = secretsInStaged
-        .map((s) => `  ${s.filePath}:${s.line} — ${s.description} (${s.match})`)
-        .join("\n");
-      block(
-        `[agentmask] BLOCKED: Secrets detected in staged files. Fix before committing.\n${details}\n\n` +
-          `Remove the hardcoded secrets and use environment variable references instead.`,
-      );
+    try {
+      const findings = await scanStaged(cwd);
+      if (findings.length > 0) {
+        const details = findings
+          .map((f) => `  ${f.File}:${f.StartLine} — ${f.Description}`)
+          .join("\n");
+        block(
+          `[agentmask] BLOCKED: Secrets detected in staged files. Fix before committing.\n${details}\n\n` +
+            `Remove the hardcoded secrets and use environment variable references instead.`,
+        );
+      }
+    } catch {
+      // gitleaks failed — allow the commit (graceful degradation)
     }
   }
 
   allow();
-}
-
-function scanStagedFiles(
-  cwd: string,
-): Array<{ filePath: string; line: number; description: string; match: string }> {
-  let stagedFiles: string[];
-  try {
-    const output = execSync("git diff --cached --name-only --diff-filter=ACMR", {
-      cwd,
-      encoding: "utf-8",
-    });
-    stagedFiles = output.trim().split("\n").filter(Boolean);
-  } catch {
-    return [];
-  }
-
-  const findings: Array<{
-    filePath: string;
-    line: number;
-    description: string;
-    match: string;
-  }> = [];
-
-  for (const file of stagedFiles) {
-    // Get staged content (not working tree content)
-    let content: string;
-    try {
-      content = execSync(`git show ":${file}"`, { cwd, encoding: "utf-8" });
-    } catch {
-      continue;
-    }
-
-    const fileFindings = scanContent(content, file);
-    for (const f of fileFindings) {
-      findings.push({
-        filePath: f.filePath,
-        line: f.line,
-        description: f.description,
-        match: f.match,
-      });
-    }
-  }
-
-  return findings;
 }
 
 main().catch(() => process.exit(1));

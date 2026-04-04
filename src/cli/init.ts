@@ -1,48 +1,42 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, relative } from "node:path";
 import { execSync } from "node:child_process";
-import { isBlockedPath, DEFAULT_BLOCKED_PATTERNS, isBinaryFile } from "../scanner/file-patterns.js";
-import { scanContent } from "../scanner/scanner.js";
-import { TIER1_RULES } from "../scanner/rules.js";
+import { getGitleaksBinary } from "../gitleaks/binary.js";
+import { scanDir, type GitleaksFinding } from "../gitleaks/runner.js";
 import { saveBlocklist, type BlocklistData } from "../hooks/blocklist.js";
-import type { Finding } from "../scanner/types.js";
 
 interface InitOptions {
   team?: boolean;
 }
 
-const SKIP_DIRS = new Set([
-  "node_modules", ".git", "dist", "build", ".next", ".nuxt",
-  "__pycache__", ".venv", "venv", ".tox", ".mypy_cache",
-  "vendor", "target", ".idea", ".vscode",
-  ".claude", ".agentmask",
-]);
-
 export async function runInit(options: InitOptions): Promise<void> {
   const cwd = process.cwd();
-  const binPath = getBinPath();
+
+  // === Step 0: Ensure gitleaks is available (auto-downloads if needed) ===
+  const gitleaksBin = await getGitleaksBinary();
 
   // === Step 1: Scan entire repo for secrets ===
   console.log("Scanning repository for secrets...");
-  const { fileCount, findings, blocklist } = scanRepo(cwd);
+  const findings = await scanDir(cwd);
+  const blocklist = buildBlocklist(findings, cwd);
   const blocklistEntryCount = Object.keys(blocklist.files).length;
 
   // Count static-blocked files
   const staticBlocked = findStaticBlockedFiles(cwd);
 
-  console.log(`  Scanned ${fileCount} files.`);
-
   if (findings.length > 0) {
     console.log("");
     console.log(`  Found secrets in ${blocklistEntryCount} file(s):`);
     for (const f of findings.slice(0, 20)) {
-      const relPath = relative(cwd, resolve(cwd, f.filePath));
-      const severityTag = f.severity === "critical" ? "[CRIT]" : "[HIGH]";
-      console.log(`    ${severityTag} ${relPath}:${f.line} — ${f.description}`);
+      const relPath = relative(cwd, f.File);
+      const tag = f.Description.toLowerCase().includes("critical") ? "[CRIT]" : "[HIGH]";
+      console.log(`    ${tag} ${relPath}:${f.StartLine} — ${f.Description}`);
     }
     if (findings.length > 20) {
       console.log(`    ... and ${findings.length - 20} more`);
     }
+  } else {
+    console.log("  No secrets found in source files.");
   }
 
   if (staticBlocked.length > 0) {
@@ -62,6 +56,7 @@ export async function runInit(options: InitOptions): Promise<void> {
   saveBlocklist(cwd, blocklist);
 
   // === Step 3: Install hooks ===
+  const binPath = getAgentmaskBinPath();
   const settingsFile = options.team
     ? join(settingsDir, "settings.json")
     : join(settingsDir, "settings.local.json");
@@ -99,86 +94,29 @@ export async function runInit(options: InitOptions): Promise<void> {
   console.log("Re-run `agentmask init` anytime to rescan.");
 }
 
-/**
- * Scan the entire repo for secrets using Tier 1 rules only (zero false positives).
- */
-function scanRepo(cwd: string): {
-  fileCount: number;
-  findings: Finding[];
-  blocklist: BlocklistData;
-} {
-  const files = collectAllFiles(cwd);
-  const allFindings: Finding[] = [];
+function buildBlocklist(
+  findings: GitleaksFinding[],
+  cwd: string,
+): BlocklistData {
   const blocklist: BlocklistData = { files: {} };
 
-  for (const filePath of files) {
-    let content: string;
-    try {
-      const buf = readFileSync(filePath);
-      // Skip binary content (null bytes in first 8KB)
-      if (buf.subarray(0, 8192).includes(0)) continue;
-      // Limit to 1MB
-      content = buf.subarray(0, 1024 * 1024).toString("utf-8");
-    } catch {
-      continue;
-    }
-
-    const relPath = relative(cwd, filePath);
-    const findings = scanContent(content, relPath, TIER1_RULES);
-
-    if (findings.length > 0) {
-      allFindings.push(...findings);
-      const secrets = [...new Set(findings.map((f) => f.description))];
-      blocklist.files[relPath.replace(/\\/g, "/")] = {
-        secrets,
+  for (const f of findings) {
+    const relPath = relative(cwd, f.File).replace(/\\/g, "/");
+    if (!blocklist.files[relPath]) {
+      blocklist.files[relPath] = {
+        secrets: [],
         addedAt: new Date().toISOString(),
       };
     }
-  }
-
-  return { fileCount: files.length, findings: allFindings, blocklist };
-}
-
-/**
- * Collect all text files in the repo, respecting skip directories.
- */
-function collectAllFiles(dir: string): string[] {
-  const files: string[] = [];
-  walkDir(dir, files, dir);
-  return files;
-}
-
-function walkDir(dir: string, files: string[], rootDir: string): void {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const entry of entries) {
-    if (entry.name.startsWith(".") && entry.name !== ".env" && dir === rootDir) {
-      // Skip hidden dirs at root level (except check for .env files)
-      if (entry.isDirectory()) continue;
-    }
-
-    const fullPath = join(dir, entry.name);
-
-    if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue;
-      walkDir(fullPath, files, rootDir);
-    } else if (entry.isFile()) {
-      if (isBinaryFile(fullPath)) continue;
-      // Don't scan files already covered by static blocklist
-      if (isBlockedPath(fullPath, DEFAULT_BLOCKED_PATTERNS)) continue;
-      files.push(fullPath);
+    const entry = blocklist.files[relPath];
+    if (!entry.secrets.includes(f.Description)) {
+      entry.secrets.push(f.Description);
     }
   }
+
+  return blocklist;
 }
 
-/**
- * Find files in the project that match static blocked patterns.
- */
 function findStaticBlockedFiles(cwd: string): string[] {
   const results: string[] = [];
   const commonFiles = [
@@ -197,9 +135,9 @@ function findStaticBlockedFiles(cwd: string): string[] {
   return results;
 }
 
-function getBinPath(): string {
+function getAgentmaskBinPath(): string {
   try {
-    const resolved = execSync("which agentmask", { encoding: "utf-8" }).trim();
+    const resolved = execSync("which agentmask", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
     if (resolved) return resolved;
   } catch {}
 
@@ -223,41 +161,13 @@ function mergeHooks(
     ...existing,
     PreToolUse: [
       ...cleanPre,
-      {
-        matcher: "Read",
-        hooks: [{
-          type: "command",
-          command: `${binPath} hook pre-read`,
-          timeout: 5,
-        }],
-      },
-      {
-        matcher: "Bash",
-        hooks: [{
-          type: "command",
-          command: `${binPath} hook pre-bash`,
-          timeout: 5,
-        }],
-      },
-      {
-        matcher: "Write|Edit",
-        hooks: [{
-          type: "command",
-          command: `${binPath} hook pre-write`,
-          timeout: 5,
-        }],
-      },
+      { matcher: "Read", hooks: [{ type: "command", command: `${binPath} hook pre-read`, timeout: 5 }] },
+      { matcher: "Bash", hooks: [{ type: "command", command: `${binPath} hook pre-bash`, timeout: 5 }] },
+      { matcher: "Write|Edit", hooks: [{ type: "command", command: `${binPath} hook pre-write`, timeout: 5 }] },
     ],
     PostToolUse: [
       ...cleanPost,
-      {
-        matcher: "Read|Bash",
-        hooks: [{
-          type: "command",
-          command: `${binPath} hook post-scan`,
-          timeout: 5,
-        }],
-      },
+      { matcher: "Read|Bash", hooks: [{ type: "command", command: `${binPath} hook post-scan`, timeout: 5 }] },
     ],
   };
 }

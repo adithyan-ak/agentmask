@@ -1,5 +1,5 @@
 import { readStdin, allow, startSafetyTimer } from "./common.js";
-import { scanContent } from "../scanner/scanner.js";
+import { scanContent } from "../gitleaks/runner.js";
 import { addToBlocklist } from "./blocklist.js";
 
 startSafetyTimer();
@@ -15,33 +15,37 @@ async function main() {
     return;
   }
 
-  // Truncate very large outputs to stay within time budget
   const toScan = response.length > MAX_SCAN_LENGTH
     ? response.slice(0, MAX_SCAN_LENGTH)
     : response;
 
   const filePath = (input.tool_input?.file_path as string) ?? "";
-  const findings = scanContent(toScan, filePath);
 
-  if (findings.length > 0) {
-    const types = [...new Set(findings.map((f) => f.description))];
-    const cwd = input.cwd ?? process.cwd();
+  try {
+    const findings = await scanContent(toScan);
 
-    // Add to blocklist so future reads are blocked
-    if (filePath) {
-      try {
-        addToBlocklist(filePath, types, cwd);
-      } catch {
-        // Non-critical — don't fail the hook if blocklist write fails
+    if (findings.length > 0) {
+      const types = [...new Set(findings.map((f) => f.Description))];
+      const cwd = input.cwd ?? process.cwd();
+
+      // Add to blocklist so future reads are blocked
+      if (filePath) {
+        try {
+          addToBlocklist(filePath, types, cwd);
+        } catch {
+          // Non-critical
+        }
       }
-    }
 
-    allow(
-      `[agentmask] WARNING: The output above contains ${findings.length} detected secret(s): ${types.join(", ")}.\n` +
-        `Do NOT repeat these values in your response, code, or commits. Reference by variable name only.\n` +
-        `This file has been added to the blocklist — future reads will be blocked and redirected to safe_read.`,
-    );
-    return;
+      allow(
+        `[agentmask] WARNING: The output above contains ${findings.length} detected secret(s): ${types.join(", ")}.\n` +
+          `Do NOT repeat these values in your response, code, or commits. Reference by variable name only.\n` +
+          `This file has been added to the blocklist — future reads will be blocked and redirected to safe_read.`,
+      );
+      return;
+    }
+  } catch {
+    // gitleaks failed — degrade gracefully
   }
 
   allow();

@@ -1,6 +1,7 @@
 import { readStdin, block, allow, startSafetyTimer } from "./common.js";
 import { isBlockedPath, DEFAULT_BLOCKED_PATTERNS } from "../scanner/file-patterns.js";
-import { scanContent } from "../scanner/scanner.js";
+import { scanContent } from "../gitleaks/runner.js";
+import { basename } from "node:path";
 
 startSafetyTimer();
 
@@ -29,18 +30,22 @@ async function main() {
     return;
   }
 
-  const findings = scanContent(content, filePath);
+  try {
+    const findings = await scanContent(content, basename(filePath));
 
-  if (findings.length > 0) {
-    const details = findings
-      .map((f) => `  Line ${f.line}: ${f.description} (${f.match})`)
-      .join("\n");
-    block(
-      `[agentmask] BLOCKED: Detected ${findings.length} secret(s) in content being written to ${filePath}:\n` +
-        `${details}\n\n` +
-        `Use environment variable references instead of hardcoding secrets.\n` +
-        `Example: process.env.API_KEY or os.environ["API_KEY"]`,
-    );
+    if (findings.length > 0) {
+      const details = findings
+        .map((f) => `  Line ${f.StartLine}: ${f.Description}`)
+        .join("\n");
+      block(
+        `[agentmask] BLOCKED: Detected ${findings.length} secret(s) in content being written to ${filePath}:\n` +
+          `${details}\n\n` +
+          `Use environment variable references instead of hardcoding secrets.\n` +
+          `Example: process.env.API_KEY or os.environ["API_KEY"]`,
+      );
+    }
+  } catch {
+    // gitleaks failed — degrade gracefully, allow the write
   }
 
   allow();
