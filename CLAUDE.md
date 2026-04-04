@@ -9,7 +9,9 @@ agentmask is an open-source secrets firewall for AI coding agents. It prevents C
 ```
 Layer 1: BLOCK (PreToolUse hooks)
   → Intercepts Read, Bash, Write, Edit tool calls
-  → Blocks access to secret files (.env, credentials, keys)
+  → Pre-read checks: static patterns (.env, *.pem) + dynamic blocklist
+  → Dynamic blocklist built by init scan + updated by post-scan at runtime
+  → Blocks access BEFORE secrets enter the model's context
   → Blocks writing hardcoded secrets into source code
   → Scans staged files before git commit
 
@@ -26,19 +28,31 @@ Layer 3: INSTRUCT (.claude/rules/agentmask.md)
 
 All three layers are necessary. Without Layer 1, secrets enter context. Without Layer 2, Claude gets stuck after a block. Without Layer 3, Claude repeatedly tries blocked operations.
 
+## The Blocklist System
+
+The key innovation is the **dynamic blocklist** (`.claude/agentmask-blocklist.json`):
+
+1. `agentmask init` scans the entire repo using Tier 1 rules (zero false positives)
+2. Every file containing a detected secret is added to the blocklist
+3. Pre-read hook checks the blocklist on every Read call — blocked files never enter context
+4. Post-scan hook catches secrets in files NOT in the blocklist (new/modified files) and auto-adds them
+5. First read of a new secret file still leaks (unavoidable), but every subsequent read is blocked
+6. `allow-path` removes entries from the blocklist (after secrets are fixed)
+7. Re-running `agentmask init` rescans and rebuilds the blocklist
+
 ## Project Structure
 
 ```
 src/
-├── cli.ts                  # CLI entrypoint — Commander.js, 7 commands
+├── cli.ts                  # CLI entrypoint — Commander.js, 8 commands
 ├── cli/
 │   ├── scan.ts             # `agentmask scan` — file/directory/staged scanning
-│   ├── init.ts             # `agentmask init` — installs hooks + MCP + rules
-│   ├── remove.ts           # `agentmask remove` — clean uninstall
-│   └── allowlist.ts        # `allow-path`, `allow-value` commands
+│   ├── init.ts             # `agentmask init` — scans repo, builds blocklist, installs hooks + MCP + rules
+│   ├── remove.ts           # `agentmask remove` — clean uninstall including blocklist
+│   └── allowlist.ts        # `allow-path` (also removes from blocklist), `allow-value`
 ├── scanner/
 │   ├── types.ts            # Rule, Finding, ScanResult, Config types
-│   ├── rules.ts            # Detection rules: TIER1_RULES, TIER2_RULES, ALL_RULES
+│   ├── rules.ts            # Detection rules: TIER1_RULES, TIER2_RULES, ALL_RULES, STOPWORDS
 │   ├── entropy.ts          # Shannon entropy + secret classification heuristics
 │   ├── file-patterns.ts    # Blocked path globs, binary detection, allowlists
 │   ├── redact.ts           # Format-preserving redaction engine
@@ -46,10 +60,11 @@ src/
 │   └── index.ts            # Barrel export
 ├── hooks/
 │   ├── common.ts           # Hook I/O: readStdin, block(), allow(), safety timer
-│   ├── pre-read.ts         # Blocks reading secret files
+│   ├── blocklist.ts        # Dynamic blocklist: load, save, query, add, remove
+│   ├── pre-read.ts         # Checks static patterns + dynamic blocklist → blocks or allows
 │   ├── pre-bash.ts         # Blocks bash secret access + pre-commit scanning
 │   ├── pre-write.ts        # Blocks writing hardcoded secrets to non-.env files
-│   └── post-scan.ts        # Safety net: warns about secrets in tool output
+│   └── post-scan.ts        # Scans tool output, warns + auto-adds to blocklist
 ├── mcp/
 │   └── server.ts           # MCP server with 4 tools (uses @modelcontextprotocol/sdk)
 └── config/
@@ -64,18 +79,18 @@ src/
 - **Graceful degradation** — hook crashes → exit 1 (allow), NEVER exit 2 (block). A bug in agentmask must never block the user's work.
 - **Hooks use exit code 2 to block, 0 to allow** — this is Claude Code's hook contract
 - **4-second safety timeout** on every hook (Claude Code's limit is 5s)
-- **Tier 1 rules first** — provider-specific patterns with known prefixes have near-zero false positives. Tier 2 generic rules use entropy filtering and are lower confidence.
+- **Init scan uses Tier 1 rules only** — zero false positives for blocklist building. Tier 2 generic rules are for reporting only.
 - **Format-preserving redaction** for connection strings — `postgresql://****:****@host:5432/db` not just `[REDACTED]`
 - **Pre-write hook skips .env files** — they're expected to contain secrets; blocking writes to them would break workflows
-- **Post-scan hook can only warn, not block** — the tool already ran. The warning tells the model not to propagate the secret.
+- **Post-scan warns AND auto-blocklists** — first read of a new secret file leaks (unavoidable), but every subsequent read is blocked
 
 ## Detection Engine
 
-### Tier 1 (30 rules) — Provider-specific, near-zero false positives
-Each has a known prefix or format: `AKIA*` (AWS), `ghp_*` (GitHub), `sk_live_*` (Stripe), `GOCSPX-*` (Google OAuth), `AIza*` (GCP), `xoxb-*` (Slack), `SG.*.*` (SendGrid), PEM headers, JWTs, connection strings, etc.
+### Tier 1 (30 rules) — Provider-specific, zero false positives
+Each has a known prefix or format: `AKIA*` (AWS), `ghp_*` (GitHub), `sk_live_*` (Stripe), `GOCSPX-*` (Google OAuth), `AIza*` (GCP), `xoxb-*` (Slack), `SG.*.*` (SendGrid), PEM headers, JWTs, connection strings, etc. **Used for blocklist building.**
 
 ### Tier 2 (1 rule) — Generic keyword→operator→value with entropy filtering
-Catches `api_key = "high_entropy_value"` patterns. Uses Shannon entropy threshold (3.5 bits/char) and a stopword list to reduce false positives.
+Catches `api_key = "high_entropy_value"` patterns. Uses Shannon entropy threshold (3.5 bits/char) and a stopword list to reduce false positives. **Used for reporting only, NOT for blocklist.**
 
 ### Adding a New Rule
 Add to `TIER1_RULES` in `src/scanner/rules.ts`:
@@ -145,3 +160,4 @@ stopwords = ["EXAMPLE_KEY"]
 - ML-based classification for reducing Tier 2 false positives
 - CI/CD GitHub Actions workflow
 - npm publish automation
+- SessionStart hook to auto-rescan on new sessions
