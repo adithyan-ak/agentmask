@@ -1,5 +1,6 @@
 import { readStdin, allow, startSafetyTimer } from "./common.js";
 import { scanContent } from "../gitleaks/runner.js";
+import { scanTier2Content, mergeFindings } from "../scanner/tier2.js";
 import { addToBlocklist } from "./blocklist.js";
 
 startSafetyTimer();
@@ -22,7 +23,9 @@ async function main() {
   const filePath = (input.tool_input?.file_path as string) ?? "";
 
   try {
-    const findings = await scanContent(toScan);
+    const tier1 = await scanContent(toScan).catch(() => []);
+    const tier2 = scanTier2Content(toScan, filePath || "output");
+    const findings = mergeFindings(tier1, tier2);
 
     if (findings.length > 0) {
       const types = [...new Set(findings.map((f) => f.Description))];

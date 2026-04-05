@@ -8,6 +8,7 @@ import {
   scanStaged as gitleaksScanStaged,
   type GitleaksFinding,
 } from "../gitleaks/runner.js";
+import { scanTier2File, mergeFindings } from "../scanner/tier2.js";
 
 export async function startServer(): Promise<void> {
   const server = new McpServer({
@@ -25,8 +26,10 @@ export async function startServer(): Promise<void> {
         const resolved = resolve(file_path);
         const content = await readFile(resolved, "utf-8");
 
-        // Run gitleaks on the file to find secrets
-        const findings = await gitleaksScanFile(resolved);
+        // Run gitleaks + tier2 on the file to find secrets
+        const tier1 = await gitleaksScanFile(resolved);
+        const tier2 = scanTier2File(resolved);
+        const findings = mergeFindings(tier1, tier2);
 
         if (findings.length === 0) {
           return { content: [{ type: "text", text: content }] };
@@ -121,7 +124,9 @@ export async function startServer(): Promise<void> {
     async ({ file_path }) => {
       try {
         const resolved = resolve(file_path);
-        const findings = await gitleaksScanFile(resolved);
+        const tier1 = await gitleaksScanFile(resolved);
+        const tier2 = scanTier2File(resolved);
+        const findings = mergeFindings(tier1, tier2);
 
         if (findings.length === 0) {
           return { content: [{ type: "text", text: "No secrets found." }] };
