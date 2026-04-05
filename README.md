@@ -35,7 +35,7 @@ agentmask init
 ```
 agentmask init
     │
-    ├── Scans entire repo for secrets (gitleaks — 150+ rules)
+    ├── Scans entire repo for secrets (gitleaks 150+ rules + agentmask tier2 rules)
     ├── .claude/agentmask-blocklist.json  ← files containing detected secrets
     ├── .claude/settings.local.json       ← PreToolUse + PostToolUse hooks
     ├── .claude/rules/agentmask.md        ← behavioral rules for Claude
@@ -62,7 +62,7 @@ A `.claude/rules/agentmask.md` file teaches Claude to prefer safe tools and neve
 
 The blocklist (`.claude/agentmask-blocklist.json`) is the key to blocking secrets before they enter context:
 
-- **Built at init time** — `agentmask init` scans every file in the repo using gitleaks (150+ provider-specific rules)
+- **Built at init time** — `agentmask init` scans every file in the repo using gitleaks (150+ provider-specific rules) plus agentmask's tier2 scanner (password fields, connection strings, and provider prefixes gitleaks misses)
 - **Updated at runtime** — if post-scan detects a secret in a file that wasn't in the blocklist, it's added automatically
 - **Checked on every read** — pre-read hook looks up the file in the blocklist before allowing the read
 - **Re-run `agentmask init`** anytime to rescan (e.g., after pulling new code)
@@ -70,11 +70,20 @@ The blocklist (`.claude/agentmask-blocklist.json`) is the key to blocking secret
 
 ## Detection
 
-Detection is powered by [gitleaks](https://github.com/gitleaks/gitleaks) — **150+ battle-tested rules** covering AWS, GitHub, Stripe, Google, GCP, Slack, SendGrid, Shopify, OpenAI, Anthropic, GitLab, Twilio, PEM keys, JWTs, database connection strings, and many more providers.
+Detection runs in two complementary passes on every scan, merged into a single unified list of findings:
 
-agentmask auto-downloads gitleaks if it's not already installed. No detection rules to maintain — when gitleaks updates, agentmask benefits automatically.
+**Tier 1 — gitleaks (150+ rules):** provider-specific tokens (AWS, GitHub, Stripe, Google, GCP, Slack, SendGrid, Shopify, OpenAI, Anthropic, GitLab, Twilio…), PEM keys, JWTs, and a `generic-api-key` rule that catches high-entropy values assigned to variable names matching `key`/`token`/`secret`/`api`/`auth`/`client`. Auto-downloaded if not installed.
 
-**Requires:** `gitleaks` (auto-installed) or `brew install gitleaks`
+**Tier 2 — agentmask (fills gitleaks gaps):** pure in-process TypeScript rules for patterns gitleaks's generic rule deliberately excludes:
+
+- `password` / `passwd` / `pwd` / `pass` field assignments in JSON, YAML, TOML, shell, compose, Makefiles, etc.
+- Connection strings with embedded credentials (`postgres://user:pass@host`, `mysql://`, `mongodb://`, `redis://`, `amqp://`)
+- `whsec_…` webhook signing secrets
+- `GOCSPX-…` Google OAuth client secrets
+
+Tier 2 runs automatically alongside every gitleaks scan — no flags, no config. Each finding in `agentmask init` output is tagged `(gitleaks)` or `(agentmask)` so you can see which layer caught it. Common placeholders (`changeme`, `your-…`, `${VAR}`, `<password>`) are skipped to keep false positives low.
+
+**Requires:** `gitleaks` (auto-installed) or `brew install gitleaks`. Tier 2 is pure TypeScript — no extra dependencies.
 
 ## Commands
 

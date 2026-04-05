@@ -5,6 +5,7 @@ import {
   scanStaged,
   type GitleaksFinding,
 } from "../gitleaks/runner.js";
+import { scanTier2Dir, mergeFindings } from "../scanner/tier2.js";
 
 interface ScanOptions {
   staged?: boolean;
@@ -23,7 +24,9 @@ export async function runScan(
     findings = await scanStaged(cwd);
   } else {
     const targetPath = resolve(cwd, target ?? ".");
-    findings = await scanDir(targetPath);
+    const tier1 = await scanDir(targetPath);
+    const tier2 = scanTier2Dir(targetPath);
+    findings = mergeFindings(tier1, tier2);
   }
 
   if (options.json) {
