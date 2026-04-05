@@ -2,19 +2,15 @@ name: Publish to npm
 
 on:
   push:
-    branches: [main]
+    tags: ["v*"]
 
 jobs:
   publish:
-    # Only run if commit message contains [release]
-    if: contains(github.event.head_commit.message, '[release]')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
@@ -23,6 +19,7 @@ jobs:
 
       - name: Install gitleaks
         run: |
+          cd /tmp
           curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.22.1/gitleaks_8.22.1_linux_x64.tar.gz | tar xz
           sudo mv gitleaks /usr/local/bin/
 
@@ -30,16 +27,14 @@ jobs:
       - run: npm run build
       - run: npm test
 
-      - name: Bump patch version
+      - name: Verify tag matches package.json version
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          npm version patch --no-git-tag-version
-          VERSION=$(node -p "require('./package.json').version")
-          git add package.json package-lock.json
-          git commit -m "v${VERSION}"
-          git tag "v${VERSION}"
-          git push origin main --tags
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
 
       - name: Publish to npm
         run: npm publish --access public
@@ -49,6 +44,4 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          gh release create "v${VERSION}" --title "v${VERSION}" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
