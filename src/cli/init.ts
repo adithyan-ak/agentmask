@@ -3,6 +3,7 @@ import { join, resolve, relative } from "node:path";
 import { execSync } from "node:child_process";
 import { getGitleaksBinary } from "../gitleaks/binary.js";
 import { scanDir, type GitleaksFinding } from "../gitleaks/runner.js";
+import { scanTier2Dir, mergeFindings } from "../scanner/tier2.js";
 import { saveBlocklist, type BlocklistData } from "../hooks/blocklist.js";
 
 interface InitOptions {
@@ -17,7 +18,9 @@ export async function runInit(options: InitOptions): Promise<void> {
 
   // === Step 1: Scan entire repo for secrets ===
   console.log("Scanning repository for secrets...");
-  const findings = await scanDir(cwd);
+  const tier1Findings = await scanDir(cwd);
+  const tier2Findings = scanTier2Dir(cwd);
+  const findings = mergeFindings(tier1Findings, tier2Findings);
   const blocklist = buildBlocklist(findings, cwd);
   const blocklistEntryCount = Object.keys(blocklist.files).length;
 
@@ -30,7 +33,8 @@ export async function runInit(options: InitOptions): Promise<void> {
     for (const f of findings.slice(0, 20)) {
       const relPath = relative(cwd, f.File);
       const tag = f.Description.toLowerCase().includes("critical") ? "[CRIT]" : "[HIGH]";
-      console.log(`    ${tag} ${relPath}:${f.StartLine} — ${f.Description}`);
+      const source = f.RuleID.startsWith("agentmask-") ? " (agentmask)" : " (gitleaks)";
+      console.log(`    ${tag} ${relPath}:${f.StartLine} — ${f.Description}${source}`);
     }
     if (findings.length > 20) {
       console.log(`    ... and ${findings.length - 20} more`);

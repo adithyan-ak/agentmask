@@ -4,7 +4,7 @@ import { join, dirname, resolve } from "node:path";
 /**
  * Dynamic blocklist — files where secrets have been detected.
  *
- * Built at init time by scanning the entire repo (Tier 1 rules only).
+ * Built at init time by scanning the entire repo (gitleaks + tier2).
  * Updated at runtime by post-scan when secrets are found in new files.
  * Checked by pre-read to block files before they enter context.
  */

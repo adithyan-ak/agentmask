@@ -1,6 +1,7 @@
 import { readStdin, block, allow, startSafetyTimer } from "./common.js";
 import { isBlockedPath, DEFAULT_BLOCKED_PATTERNS } from "../scanner/file-patterns.js";
 import { scanContent } from "../gitleaks/runner.js";
+import { scanTier2Content, mergeFindings } from "../scanner/tier2.js";
 import { basename } from "node:path";
 
 startSafetyTimer();
@@ -31,7 +32,9 @@ async function main() {
   }
 
   try {
-    const findings = await scanContent(content, basename(filePath));
+    const tier1 = await scanContent(content, basename(filePath)).catch(() => []);
+    const tier2 = scanTier2Content(content, filePath);
+    const findings = mergeFindings(tier1, tier2);
 
     if (findings.length > 0) {
       const details = findings
