@@ -1,8 +1,12 @@
 import { Command } from "commander";
+import { createRequire } from "node:module";
 import { runScan } from "./cli/scan.js";
 import { runInit } from "./cli/init.js";
 import { runRemove } from "./cli/remove.js";
 import { runAllowPath, runAllowValue } from "./cli/allowlist.js";
+
+const require = createRequire(import.meta.url);
+const { version } = require("../package.json");
 
 const program = new Command();
 
@@ -11,7 +15,7 @@ program
   .description(
     "Mask your secrets from AI coding agents. One command. Zero friction.",
   )
-  .version("0.1.0");
+  .version(version);
 
 program
   .command("scan [path]")

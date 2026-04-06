@@ -2,6 +2,10 @@
 
 Mask your secrets from AI coding agents. One command. Zero friction.
 
+<p align="center">
+  <img src="agentmask.gif" alt="agentmask demo" width="720" />
+</p>
+
 agentmask prevents Claude Code (and other AI coding assistants) from reading, leaking, or committing your secrets. It works through three reinforcing layers:
 
 1. **Block** — Hooks that prevent secret files from being read and secret values from being written
@@ -76,13 +80,13 @@ Detection runs in two complementary passes on every scan, merged into a single u
 
 **agentmask (fills gitleaks gaps):** pure in-process TypeScript rules for patterns gitleaks's generic rule deliberately excludes:
 
-- `password` / `passwd` / `pwd` / `pass` field assignments in JSON, YAML, TOML, shell, compose, Makefiles, etc.
+- `password` / `passwd` / `pwd` field assignments in JSON, YAML, TOML, shell, compose, Makefiles, etc.
 - SQL `PASSWORD 'value'` assignments (ALTER/CREATE USER, etc.)
 - Connection strings with embedded credentials (`postgres://user:pass@host`, `mysql://`, `mongodb://`, `redis://`, `amqp://`)
 - `whsec_…` webhook signing secrets
 - `GOCSPX-…` Google OAuth client secrets
 
-The agentmask scanner runs automatically alongside every gitleaks scan — no flags, no config. Each finding in `agentmask init` output is tagged `(gitleaks)` or `(agentmask)` so you can see which scanner caught it. Common placeholders (`changeme`, `your-…`, `${VAR}`, `<password>`) are skipped to keep false positives low.
+The agentmask scanner runs automatically alongside every gitleaks scan — no flags, no config. Common placeholders (`changeme`, `your-…`, `${VAR}`, `<password>`) are skipped to keep false positives low.
 
 **Requires:** `gitleaks` (auto-installed) or `brew install gitleaks`. The agentmask scanner is pure TypeScript — no extra dependencies.
 
@@ -166,7 +170,7 @@ agentmask is designed to never block your work due to its own failure:
 
 By default, agentmask blocks direct reading of these patterns (static, always active):
 
-`.env`, `.env.*`, `credentials.json`, `serviceAccountKey.json`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa`, `id_ed25519`, `.netrc`, `.npmrc`, `.pypirc`, `.docker/config.json`, `.kube/config`, `.aws/credentials`, `.azure/credentials`, `.gcloud/*.json`, `secrets.yml`, `secrets.yaml`, `secrets.json`, `.htpasswd`
+`.env`, `.env.*`, `credentials.json`, `serviceAccountKey.json`, `service-account*.json`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa`, `id_ed25519`, `id_ecdsa`, `id_dsa`, `.netrc`, `.npmrc`, `.pypirc`, `.docker/config.json`, `.kube/config`, `kubeconfig`, `.aws/credentials`, `.aws/config`, `.azure/credentials`, `.gcloud/*.json`, `secrets.yml`, `secrets.yaml`, `secrets.json`, `.htpasswd`
 
 In addition, `agentmask init` scans all other files and blocklists any that contain secrets.
 
