@@ -8,7 +8,7 @@ import { extract } from "tar";
 /**
  * Pinned gitleaks version. Update this when testing against a new release.
  */
-const GITLEAKS_VERSION = "8.22.1";
+const GITLEAKS_VERSION = "8.28.0";
 
 /**
  * Where we cache the downloaded binary.

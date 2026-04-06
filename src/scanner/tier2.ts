@@ -96,6 +96,16 @@ export const TIER2_RULES: Tier2Rule[] = [
     rejectValue: isCodeExpression,
   },
   {
+    id: "agentmask-sql-password",
+    description: "SQL password assignment (ALTER/CREATE USER ... PASSWORD 'value')",
+    regex:
+      /\bPASSWORD\s+['"]([^'"\n\r]{6,})['"]/gi,
+    secretGroup: 1,
+    minLength: 6,
+    stopwords: COMMON_STOPWORDS,
+    rejectValue: isCodeExpression,
+  },
+  {
     id: "agentmask-connection-string",
     description: "Connection string with embedded credentials",
     // postgres://user:pass@host, mysql://, mongodb://, redis://, amqp://
