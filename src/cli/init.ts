@@ -17,7 +17,8 @@ export async function runInit(options: InitOptions): Promise<void> {
   const gitleaksBin = await getGitleaksBinary();
 
   // === Step 1: Scan entire repo for secrets ===
-  console.log("Scanning repository for secrets...");
+  console.log("");
+  console.log("  ◇ Scanning repository for secrets...");
   const tier1Findings = await scanDir(cwd);
   const tier2Findings = scanTier2Dir(cwd);
   const findings = mergeFindings(tier1Findings, tier2Findings);
@@ -27,31 +28,41 @@ export async function runInit(options: InitOptions): Promise<void> {
   // Count static-blocked files
   const staticBlocked = findStaticBlockedFiles(cwd);
 
+  console.log("");
   if (findings.length > 0) {
-    console.log("");
-    console.log(`  Found secrets in ${blocklistEntryCount} file(s):`);
-    for (const f of findings.slice(0, 20)) {
-      const relPath = relative(cwd, f.File);
-      const tag = f.Description.toLowerCase().includes("critical") ? "[CRIT]" : "[HIGH]";
-      const source = f.RuleID.startsWith("agentmask-") ? " (agentmask)" : " (gitleaks)";
-      console.log(`    ${tag} ${relPath}:${f.StartLine} — ${f.Description}${source}`);
+    console.log(boxTop(`Findings ── ${plural(findings.length, "secret")} · ${plural(blocklistEntryCount, "file")}`));
+    console.log(boxEmpty());
+    const shown = findings.slice(0, 5);
+    const pathCol = Math.max(...shown.map((f) => `${relative(cwd, f.File)}:${f.StartLine}`.length)) + 3;
+    for (const f of shown) {
+      const loc = `${relative(cwd, f.File)}:${f.StartLine}`;
+      console.log(boxLine(`HIGH  ${loc.padEnd(pathCol)}${shortDesc(f.Description)}`));
     }
-    if (findings.length > 20) {
-      console.log(`    ... and ${findings.length - 20} more`);
+    if (findings.length > 5) {
+      console.log(boxEmpty());
+      console.log(boxLine(`… and ${findings.length - 5} more (run \`agentmask scan\` for full report)`));
     }
+    console.log(boxEmpty());
+    console.log(boxBottom());
   } else {
-    console.log("  No secrets found in source files.");
+    console.log(boxTop("Findings"));
+    console.log(boxEmpty());
+    console.log(boxLine("No secrets found ✔"));
+    console.log(boxEmpty());
+    console.log(boxBottom());
   }
 
   if (staticBlocked.length > 0) {
     console.log("");
-    console.log("  Protected by default (static patterns):");
-    for (const f of staticBlocked.slice(0, 10)) {
-      console.log(`    [blocked] ${f}`);
+    console.log(boxTop(`Blocked by pattern ── ${plural(staticBlocked.length, "file")}`));
+    console.log(boxEmpty());
+    console.log(boxLine(staticBlocked.slice(0, 5).join("    ")));
+    if (staticBlocked.length > 5) {
+      console.log(boxEmpty());
+      console.log(boxLine(`… and ${staticBlocked.length - 5} more`));
     }
-    if (staticBlocked.length > 10) {
-      console.log(`    ... and ${staticBlocked.length - 10} more`);
-    }
+    console.log(boxEmpty());
+    console.log(boxBottom());
   }
 
   // === Step 2: Save blocklist ===
@@ -86,16 +97,22 @@ export async function runInit(options: InitOptions): Promise<void> {
 
   // === Summary ===
   const totalProtected = blocklistEntryCount + staticBlocked.length;
+  const settingsRelPath = options.team ? ".claude/settings.json" : ".claude/settings.local.json";
   console.log("");
-  console.log(`  Hooks installed → ${options.team ? ".claude/settings.json" : ".claude/settings.local.json"}`);
-  console.log("  Rules installed → .claude/rules/agentmask.md");
-  console.log("  MCP server registered → .mcp.json");
+  console.log(boxTop("Installed"));
+  console.log(boxEmpty());
+  console.log(boxLine(`✔ Hooks       ${settingsRelPath}`));
+  console.log(boxLine(`✔ Rules       .claude/rules/agentmask.md`));
+  console.log(boxLine(`✔ MCP         .mcp.json`));
   if (blocklistEntryCount > 0) {
-    console.log(`  Blocklist saved → .claude/agentmask-blocklist.json (${blocklistEntryCount} file(s))`);
+    console.log(boxLine(`✔ Blocklist   ${plural(blocklistEntryCount, "file")}`));
   }
+  console.log(boxEmpty());
+  console.log(boxLine(`${plural(totalProtected, "file")} protected · agentmask is active`));
+  console.log(boxEmpty());
+  console.log(boxBottom());
   console.log("");
-  console.log(`agentmask is active. ${totalProtected} file(s) protected.`);
-  console.log("Re-run `agentmask init` anytime to rescan.");
+  console.log("  Re-run `agentmask init` to rescan.");
 }
 
 function buildBlocklist(
@@ -191,6 +208,44 @@ function loadJSON(filePath: string): Record<string, any> {
   } catch {
     return {};
   }
+}
+
+// ── Box drawing helpers ──
+
+const BOX_WIDTH = 72;
+
+function boxTop(title: string): string {
+  const label = ` ${title} `;
+  const dashes = BOX_WIDTH - 2 - label.length;
+  return `  ┌${label}${"─".repeat(Math.max(0, dashes))}┐`;
+}
+
+function boxBottom(): string {
+  return `  └${"─".repeat(BOX_WIDTH - 2)}┘`;
+}
+
+function boxLine(content: string): string {
+  const inner = `  ${content}`;
+  const width = BOX_WIDTH - 2;
+  if (inner.length > width) {
+    return `  │${inner.slice(0, width - 1)}…│`;
+  }
+  return `  │${inner.padEnd(width)}│`;
+}
+
+function shortDesc(description: string): string {
+  let s = description.replace(/^Found (?:a |an )?/i, "");
+  const comma = s.indexOf(",");
+  if (comma > 0) s = s.slice(0, comma);
+  return s;
+}
+
+function boxEmpty(): string {
+  return `  │${" ".repeat(BOX_WIDTH - 2)}│`;
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
 const RULES_CONTENT = `## agentmask — Secrets Protection Rules

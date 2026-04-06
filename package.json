@@ -1,6 +1,6 @@
 {
   "name": "agentmask",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Mask your secrets from AI coding agents. One command. Zero friction.",
   "type": "module",
   "main": "dist/index.js",
