@@ -1,6 +1,6 @@
 # agentmask
 
-Mask your secrets from AI coding agents. One command. Zero friction.
+Secrets never enter context. AI never misses a beat.
 
 <p align="center">
   <img src="agentmask.gif" alt="agentmask demo" width="720" />

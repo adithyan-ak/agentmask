@@ -13,7 +13,7 @@ const program = new Command();
 program
   .name("agentmask")
   .description(
-    "Mask your secrets from AI coding agents. One command. Zero friction.",
+    "Secrets never enter context. AI never misses a beat.",
   )
   .version(version);
 
