@@ -4,15 +4,15 @@
 
 agentmask is an open-source secrets firewall for AI coding agents. It prevents Claude Code (and eventually other AI assistants) from reading, leaking, or committing secrets like API keys, tokens, passwords, and connection strings.
 
-**agentmask's value is the Claude Code integration layer** — hooks, blocklist, MCP server, behavioral rules. Primary detection is delegated to [gitleaks](https://github.com/gitleaks/gitleaks) (150+ battle-tested rules). A small **tier2 scanner** (`src/scanner/tier2.ts`) runs as a second pass to catch patterns gitleaks's `generic-api-key` rule deliberately excludes: `password`/`passwd`/`pwd` field assignments, connection strings with embedded credentials, and provider prefixes without dedicated gitleaks rules (`whsec_`, `GOCSPX-`).
+**agentmask's value is the Claude Code integration layer** — hooks, blocklist, MCP server, behavioral rules. Primary detection is delegated to [gitleaks](https://github.com/gitleaks/gitleaks) (150+ battle-tested rules). An **agentmask scanner** (`src/scanner/tier2.ts`) runs as a second pass to catch patterns gitleaks's `generic-api-key` rule deliberately excludes: `password`/`passwd`/`pwd` field assignments, connection strings with embedded credentials, and provider prefixes without dedicated gitleaks rules (`whsec_`, `GOCSPX-`).
 
 ## Architecture
 
 ```
 agentmask = Claude Code integration layer
   ├── Scanner backend: gitleaks (150+ rules, auto-downloaded if not installed)
-  ├── Tier2 scanner: complementary TS regex pass (password fields, conn strings, whsec_, GOCSPX-)
-  ├── Blocklist manager (built by merged gitleaks + tier2 findings, queried by hooks)
+  ├── agentmask scanner: complementary TS regex pass (password fields, conn strings, whsec_, GOCSPX-)
+  ├── Blocklist manager (built by merged gitleaks + agentmask findings, queried by hooks)
   ├── Hooks (pre-read, pre-write, pre-bash, post-scan)
   ├── MCP server (safe_read, env_names, scan_file, scan_staged)
   └── Behavioral rules (.claude/rules/agentmask.md)
@@ -23,14 +23,14 @@ agentmask = Claude Code integration layer
 ```
 Layer 1: BLOCK (PreToolUse hooks)
   → Pre-read: static path patterns + dynamic blocklist lookup (no subprocess, <5ms)
-  → Pre-write: gitleaks + tier2 scan on content via temp file (~200ms)
+  → Pre-write: gitleaks + agentmask scan on content via temp file (~200ms)
   → Pre-bash: pattern match on commands + gitleaks scan on staged files for git commit
-  → Post-scan: gitleaks + tier2 scan on tool output, warns + auto-adds to blocklist
+  → Post-scan: gitleaks + agentmask scan on tool output, warns + auto-adds to blocklist
 
 Layer 2: REDIRECT (MCP server)
-  → safe_read: reads file, uses merged gitleaks + tier2 findings to redact secrets
+  → safe_read: reads file, uses merged gitleaks + agentmask findings to redact secrets
   → env_names: lists .env variable names without values
-  → scan_file / scan_staged: explicit scans (scan_file also runs tier2)
+  → scan_file / scan_staged: explicit scans (scan_file also runs agentmask scanner)
 
 Layer 3: INSTRUCT (.claude/rules/agentmask.md)
   → Behavioral rules telling the agent to prefer safe_read
@@ -41,8 +41,8 @@ Layer 3: INSTRUCT (.claude/rules/agentmask.md)
 
 The key innovation is the **dynamic blocklist** (`.claude/agentmask-blocklist.json`):
 
-1. `agentmask init` runs `gitleaks dir .` on the entire repo, then runs the tier2 scanner on the same tree, and merges the findings
-2. Every file containing a detected secret (from either tier) is added to the blocklist
+1. `agentmask init` runs `gitleaks dir .` on the entire repo, then runs the agentmask scanner on the same tree, and merges the findings
+2. Every file containing a detected secret (from either scanner) is added to the blocklist
 3. Pre-read hook checks the blocklist on every Read call — blocked files never enter context
 4. Post-scan hook catches secrets in files NOT in the blocklist (new/modified files) and auto-adds them
 5. First read of a new secret file still leaks (unavoidable), but every subsequent read is blocked
@@ -55,8 +55,8 @@ The key innovation is the **dynamic blocklist** (`.claude/agentmask-blocklist.js
 src/
 ├── cli.ts                  # CLI entrypoint — Commander.js, 8 commands
 ├── cli/
-│   ├── scan.ts             # `agentmask scan` — gitleaks + tier2, merged output
-│   ├── init.ts             # `agentmask init` — gitleaks + tier2 scan + blocklist + hooks + MCP + rules
+│   ├── scan.ts             # `agentmask scan` — gitleaks + agentmask scanner, merged output
+│   ├── init.ts             # `agentmask init` — gitleaks + agentmask scan + blocklist + hooks + MCP + rules
 │   ├── remove.ts           # `agentmask remove` — clean uninstall including blocklist
 │   └── allowlist.ts        # `allow-path` (also removes from blocklist), `allow-value`
 ├── gitleaks/
@@ -65,14 +65,14 @@ src/
 │   └── index.ts            # Barrel export
 ├── scanner/
 │   ├── file-patterns.ts    # Static blocked path globs (.env, *.pem, etc.), binary detection
-│   └── tier2.ts            # Tier2 scanner: password fields, conn strings, whsec_, GOCSPX-
+│   └── tier2.ts            # agentmask scanner: password fields, conn strings, whsec_, GOCSPX-
 ├── hooks/
 │   ├── common.ts           # Hook I/O: readStdin, block(), allow(), safety timer
 │   ├── blocklist.ts        # Dynamic blocklist: load, save, query, add, remove
 │   ├── pre-read.ts         # Static patterns + blocklist lookup → block or allow (no subprocess)
 │   ├── pre-bash.ts         # Command pattern match + gitleaks scanStaged on git commit
-│   ├── pre-write.ts        # gitleaks + tier2 scanContent on content being written
-│   └── post-scan.ts        # gitleaks + tier2 scanContent on tool output, warns + auto-blocklists
+│   ├── pre-write.ts        # gitleaks + agentmask scanContent on content being written
+│   └── post-scan.ts        # gitleaks + agentmask scanContent on tool output, warns + auto-blocklists
 ├── mcp/
 │   └── server.ts           # MCP server with 4 tools (uses @modelcontextprotocol/sdk)
 └── config/
@@ -83,7 +83,7 @@ src/
 ## Key Design Decisions
 
 - **gitleaks as the primary scanner** — we don't reinvent detection. gitleaks has 150+ battle-tested rules. Auto-downloaded if not installed.
-- **Tier2 scanner for gitleaks gaps** — pure TypeScript regex pass (`src/scanner/tier2.ts`) that runs alongside gitleaks wherever gitleaks runs (init, scan, safe_read, scan_file, pre-write, post-scan). Catches `password`/`passwd`/`pwd` fields, connection strings with embedded creds, `whsec_`, and `GOCSPX-` — all patterns the gitleaks `generic-api-key` rule deliberately excludes. Runs in-process (<50ms), unconditional, no config. Merged into the same `GitleaksFinding[]` shape via `mergeFindings()` so downstream code is unchanged.
+- **agentmask scanner for gitleaks gaps** — pure TypeScript regex pass (`src/scanner/tier2.ts`) that runs alongside gitleaks wherever gitleaks runs (init, scan, safe_read, scan_file, pre-write, post-scan). Catches `password`/`passwd`/`pwd` fields, connection strings with embedded creds, `whsec_`, and `GOCSPX-` — all patterns the gitleaks `generic-api-key` rule deliberately excludes. Runs in-process (<50ms), unconditional, no config. Merged into the same `GitleaksFinding[]` shape via `mergeFindings()` so downstream code is unchanged.
 - **TypeScript ESM** — same ecosystem as Claude Code and the MCP SDK
 - **Graceful degradation** — hook crashes → exit 1 (allow), NEVER exit 2 (block). gitleaks subprocess failure → allow. A bug must never block the user's work.
 - **Pre-read is pure blocklist lookup** — no subprocess, no gitleaks call. <5ms. The blocklist was built at init time.

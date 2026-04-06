@@ -26,7 +26,7 @@ export async function startServer(): Promise<void> {
         const resolved = resolve(file_path);
         const content = await readFile(resolved, "utf-8");
 
-        // Run gitleaks + tier2 on the file to find secrets
+        // Run gitleaks + agentmask scanner on the file to find secrets
         const tier1 = await gitleaksScanFile(resolved);
         const tier2 = scanTier2File(resolved);
         const findings = mergeFindings(tier1, tier2);

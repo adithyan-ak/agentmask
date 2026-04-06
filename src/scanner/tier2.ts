@@ -4,7 +4,7 @@ import type { GitleaksFinding } from "../gitleaks/runner.js";
 import { isBinaryFile } from "./file-patterns.js";
 
 /**
- * Tier 2 scanner — complements gitleaks by catching patterns it misses.
+ * agentmask scanner — complements gitleaks by catching patterns it misses.
  *
  * gitleaks is excellent at provider-specific tokens and its generic-api-key
  * rule keys on variable names like key/token/secret/api/auth/client. But it
@@ -13,9 +13,9 @@ import { isBinaryFile } from "./file-patterns.js";
  *   - connection strings with embedded credentials (postgres://u:p@host)
  *   - Provider prefixes without dedicated rules (whsec_, GOCSPX-)
  *
- * Tier 2 runs as a second pass over the same files gitleaks scanned,
- * producing GitleaksFinding-shaped objects that merge seamlessly into the
- * existing blocklist, hooks, and safe_read pipelines.
+ * Runs as a second pass over the same files gitleaks scanned, producing
+ * GitleaksFinding-shaped objects that merge seamlessly into the existing
+ * blocklist, hooks, and safe_read pipelines.
  *
  * DESIGN CONSTRAINT: zero false positives. It is acceptable to miss some
  * real secrets, but every detection must be a true positive.
@@ -157,7 +157,7 @@ export function shannonEntropy(s: string): number {
 }
 
 /**
- * Scan a string of content for tier2 findings.
+ * Scan a string of content for agentmask findings.
  * Returns GitleaksFinding-shaped objects for seamless interop.
  */
 export function scanTier2Content(
@@ -309,7 +309,7 @@ function findLine(lineStarts: number[], offset: number): number {
 }
 
 /**
- * Merge tier1 (gitleaks) and tier2 findings, deduplicating by
+ * Merge gitleaks and agentmask findings, deduplicating by
  * file + line + secret.
  */
 export function mergeFindings(
