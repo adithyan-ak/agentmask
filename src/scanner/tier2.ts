@@ -9,13 +9,16 @@ import { isBinaryFile } from "./file-patterns.js";
  * gitleaks is excellent at provider-specific tokens and its generic-api-key
  * rule keys on variable names like key/token/secret/api/auth/client. But it
  * misses:
- *   - password/passwd/pass fields with high-entropy values
+ *   - password/passwd/pwd fields with literal secret values in config
  *   - connection strings with embedded credentials (postgres://u:p@host)
  *   - Provider prefixes without dedicated rules (whsec_, GOCSPX-)
  *
  * Tier 2 runs as a second pass over the same files gitleaks scanned,
  * producing GitleaksFinding-shaped objects that merge seamlessly into the
  * existing blocklist, hooks, and safe_read pipelines.
+ *
+ * DESIGN CONSTRAINT: zero false positives. It is acceptable to miss some
+ * real secrets, but every detection must be a true positive.
  */
 
 export interface Tier2Rule {
@@ -31,6 +34,8 @@ export interface Tier2Rule {
   minLength?: number;
   /** Substrings that, if present in the secret, mark it as a false positive. */
   stopwords?: string[];
+  /** Optional function to reject a matched value as a false positive. */
+  rejectValue?: (value: string) => boolean;
 }
 
 // Common placeholder values to skip across all rules.
@@ -43,35 +48,52 @@ const COMMON_STOPWORDS = [
   "changeme",
   "change_me",
   "xxxxxxxx",
-  "password123", // still catches without, but keeps obvious dummies quiet in docs
+  "password123",
   "<password>",
   "<secret>",
   "${",
   "{{",
 ];
 
+/**
+ * Returns true if the value looks like a code expression rather than a
+ * literal secret. Used by the password rule to reject false positives
+ * like function calls, property access, semver ranges, etc.
+ */
+function isCodeExpression(value: string): boolean {
+  // Function calls or method chains: useBoolean(), z.string().min(1)
+  if (/[()]/.test(value)) return true;
+  // Property access: data.password, config.dbPassword
+  if (/\.[a-zA-Z]/.test(value)) return true;
+  // Semver ranges: ^1.0.0, ~2.3.4
+  if (/^[~^]?\d+\.\d+/.test(value)) return true;
+  // Arrow functions, function keyword
+  if (/=>|function\b/.test(value)) return true;
+  // Env var references
+  if (/process\.env|os\.environ|getenv|ENV\[/i.test(value)) return true;
+  // Template literals / interpolation (also in stopwords, belt-and-suspenders)
+  if (/\$\{|{{|%\{/.test(value)) return true;
+  // Purely alphabetic (with hyphens/underscores): "enabled", "standard-mode", "required"
+  // Real passwords almost always contain at least one digit or special character.
+  if (/^[a-zA-Z_-]+$/.test(value)) return true;
+  return false;
+}
+
 export const TIER2_RULES: Tier2Rule[] = [
   {
     id: "agentmask-password-field",
     description: "Password field with high-entropy value",
-    // Matches: password = "..."  "password": "..."  password: "..."  PGPASSWORD="..."
-    // Key names: password, passwd, pass, pwd, db_pass, PGPASSWORD, vault_password, etc.
+    // Matches config-style key names with quoted values:
+    //   "password": "s3cret"   db_password = "hunter2"   PGPASSWORD: "abc123"
+    // Key must be config-style (UPPER_SNAKE, snake_case, or bare keyword).
+    // Rejects camelCase (showPassword), compound words (passport, compass, bypass).
+    // "pass" keyword dropped — too broad (passport, compass, bypass, overpass).
     regex:
-      /(?:^|[\s,{\[(])["']?([A-Za-z0-9_]*(?:password|passwd|pwd|pass)[A-Za-z0-9_]*)["']?\s*[:=]\s*["']([^"'\n\r]{6,})["']/gim,
+      /(?:^|[\s,{\[(])["']?((?:[A-Z][A-Z0-9]*_)*[A-Z0-9]*(?:PASSWORD|PASSWD|PWD)(?:_[A-Z0-9]+)*|(?:[a-z][a-z0-9]*_)*[a-z0-9]*(?:password|passwd|pwd)(?:_[a-z0-9]+)*)["']?\s*[:=]\s*["']([^"'\n\r]{6,})["']/gm,
     secretGroup: 2,
     minLength: 6,
     stopwords: COMMON_STOPWORDS,
-  },
-  {
-    id: "agentmask-password-field-unquoted",
-    description: "Password field with high-entropy value",
-    // Matches shell/env/YAML style: PGPASSWORD=value  password: value (no quotes)
-    regex:
-      /(?:^|\s)(?:export\s+)?([A-Za-z0-9_]*(?:password|passwd|pwd)[A-Za-z0-9_]*)\s*[:=]\s*([^\s"'#;,<>]{8,})/gim,
-    secretGroup: 2,
-    minLength: 8,
-    minEntropy: 2.8,
-    stopwords: COMMON_STOPWORDS,
+    rejectValue: isCodeExpression,
   },
   {
     id: "agentmask-connection-string",
@@ -81,7 +103,16 @@ export const TIER2_RULES: Tier2Rule[] = [
       /\b((?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp|amqps|rediss):\/\/[^:\s"'`]+:[^@\s"'`]+@[^\s"'`<>]+)/g,
     secretGroup: 1,
     minLength: 12,
-    stopwords: ["user:pass@", "username:password@", "USER:PASS@", "<user>"],
+    stopwords: [
+      "user:pass@",
+      "username:password@",
+      "USER:PASS@",
+      "<user>",
+      "root:root@",
+      "admin:admin@",
+      "test:test@",
+      "guest:guest@",
+    ],
   },
   {
     id: "agentmask-webhook-secret",
@@ -147,6 +178,7 @@ export function scanTier2Content(
           continue;
         }
       }
+      if (rule.rejectValue && rule.rejectValue(secret)) continue;
 
       // Dedupe by rule + secret within same file.
       const key = `${rule.id}:${secret}`;
