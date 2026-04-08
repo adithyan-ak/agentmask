@@ -63,7 +63,7 @@ describe("Integration: agentmask init + scan", () => {
     expect(existsSync(join(TEST_DIR, ".claude", "settings.local.json"))).toBe(true);
     expect(existsSync(join(TEST_DIR, ".claude", "rules", "agentmask.md"))).toBe(true);
     expect(existsSync(join(TEST_DIR, ".mcp.json"))).toBe(true);
-    expect(existsSync(join(TEST_DIR, ".claude", "agentmask-blocklist.json"))).toBe(true);
+    expect(existsSync(join(TEST_DIR, ".agentmask", "blocklist.json"))).toBe(true);
   });
 
   it("agentmask init is idempotent", () => {
@@ -79,7 +79,7 @@ describe("Integration: agentmask init + scan", () => {
 
   it("init scan detects secrets and builds blocklist", () => {
     const blocklist = JSON.parse(
-      readFileSync(join(TEST_DIR, ".claude", "agentmask-blocklist.json"), "utf-8"),
+      readFileSync(join(TEST_DIR, ".agentmask", "blocklist.json"), "utf-8"),
     );
     // leaky.ts should be in blocklist (has Stripe key)
     expect(blocklist.files["leaky.ts"]).toBeDefined();
@@ -116,7 +116,7 @@ describe("Integration: agentmask init + scan", () => {
       existsSync(join(TEST_DIR, ".claude", "rules", "agentmask.md")),
     ).toBe(false);
     expect(
-      existsSync(join(TEST_DIR, ".claude", "agentmask-blocklist.json")),
+      existsSync(join(TEST_DIR, ".agentmask", "blocklist.json")),
     ).toBe(false);
   });
 });

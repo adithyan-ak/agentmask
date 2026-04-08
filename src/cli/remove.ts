@@ -1,81 +1,57 @@
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { deleteBlocklist } from "../hooks/blocklist.js";
+import { allTargets } from "../ide/targets.js";
 
-export async function runRemove(): Promise<void> {
+interface RemoveOptions {
+  claude?: boolean;
+  cursor?: boolean;
+}
+
+export async function runRemove(options?: RemoveOptions): Promise<void> {
   const cwd = process.cwd();
-  const settingsDir = join(cwd, ".claude");
 
-  // Remove hooks from both settings files
-  for (const filename of ["settings.local.json", "settings.json"]) {
-    const settingsFile = join(settingsDir, filename);
-    if (existsSync(settingsFile)) {
+  // Default: remove from ALL known IDE locations
+  const targets = (options?.claude || options?.cursor)
+    ? allTargets().filter((t) =>
+        (options.claude && t.name === "claude") ||
+        (options.cursor && t.name === "cursor"),
+      )
+    : allTargets();
+
+  for (const target of targets) {
+    // Remove hooks
+    target.removeHooks(cwd);
+    console.log(`  Hooks removed from ${target.displayName}`);
+
+    // Remove rules
+    const rulesFile = join(cwd, target.settingsDir, target.rulesRelPath);
+    if (existsSync(rulesFile)) {
+      unlinkSync(rulesFile);
+      console.log(`  Rules removed: ${target.settingsDir}/${target.rulesRelPath}`);
+    }
+
+    // Remove MCP server
+    const mcpFile = join(cwd, target.mcpConfigPath);
+    if (existsSync(mcpFile)) {
       try {
-        const settings = JSON.parse(readFileSync(settingsFile, "utf-8"));
-        if (settings.hooks) {
-          settings.hooks.PreToolUse = filterOutAgentmask(
-            settings.hooks.PreToolUse ?? [],
-          );
-          settings.hooks.PostToolUse = filterOutAgentmask(
-            settings.hooks.PostToolUse ?? [],
-          );
-
-          // Clean up empty hook arrays
-          if (settings.hooks.PreToolUse.length === 0)
-            delete settings.hooks.PreToolUse;
-          if (settings.hooks.PostToolUse.length === 0)
-            delete settings.hooks.PostToolUse;
-          if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
-
-          writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + "\n");
-          console.log(`  Hooks removed from ${filename}`);
+        const mcpConfig = JSON.parse(readFileSync(mcpFile, "utf-8"));
+        if (mcpConfig.mcpServers?.agentmask) {
+          delete mcpConfig.mcpServers.agentmask;
+          if (Object.keys(mcpConfig.mcpServers).length === 0) {
+            delete mcpConfig.mcpServers;
+          }
+          writeFileSync(mcpFile, JSON.stringify(mcpConfig, null, 2) + "\n");
+          console.log(`  MCP server deregistered from ${target.mcpConfigPath}`);
         }
-      } catch {
-        // File isn't valid JSON — skip
-      }
+      } catch {}
     }
   }
 
-  // Remove blocklist
-  const blocklistFile = join(settingsDir, "agentmask-blocklist.json");
-  if (existsSync(blocklistFile)) {
-    unlinkSync(blocklistFile);
-    console.log("  Blocklist removed: .claude/agentmask-blocklist.json");
-  }
-
-  // Remove rules file
-  const rulesFile = join(settingsDir, "rules", "agentmask.md");
-  if (existsSync(rulesFile)) {
-    unlinkSync(rulesFile);
-    console.log("  Rules removed: .claude/rules/agentmask.md");
-  }
-
-  // Remove MCP server from .mcp.json
-  const mcpFile = join(cwd, ".mcp.json");
-  if (existsSync(mcpFile)) {
-    try {
-      const mcpConfig = JSON.parse(readFileSync(mcpFile, "utf-8"));
-      if (mcpConfig.mcpServers?.agentmask) {
-        delete mcpConfig.mcpServers.agentmask;
-        if (Object.keys(mcpConfig.mcpServers).length === 0) {
-          delete mcpConfig.mcpServers;
-        }
-        writeFileSync(mcpFile, JSON.stringify(mcpConfig, null, 2) + "\n");
-        console.log("  MCP server deregistered from .mcp.json");
-      }
-    } catch {
-      // Not valid JSON — skip
-    }
+  // Remove blocklist (shared, cleans both new and legacy paths)
+  if (deleteBlocklist(cwd)) {
+    console.log("  Blocklist removed");
   }
 
   console.log("\nagentmask has been removed.");
-}
-
-function filterOutAgentmask(hooks: any[]): any[] {
-  return hooks.filter((h: any) => {
-    const innerHooks = h?.hooks ?? [];
-    return !innerHooks.some(
-      (ih: any) =>
-        typeof ih?.command === "string" && ih.command.includes("agentmask"),
-    );
-  });
 }

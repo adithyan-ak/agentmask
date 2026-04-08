@@ -1,13 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve, relative } from "node:path";
 import { execSync } from "node:child_process";
 import { getGitleaksBinary } from "../gitleaks/binary.js";
 import { scanDir, type GitleaksFinding } from "../gitleaks/runner.js";
 import { scanTier2Dir, mergeFindings } from "../scanner/tier2.js";
-import { saveBlocklist, type BlocklistData } from "../hooks/blocklist.js";
+import { saveBlocklist, migrateBlocklistIfNeeded, type BlocklistData } from "../hooks/blocklist.js";
+import { resolveTargets, loadJSON, RULES_CONTENT, type IdeTarget } from "../ide/targets.js";
 
 interface InitOptions {
   team?: boolean;
+  claude?: boolean;
+  cursor?: boolean;
 }
 
 export async function runInit(options: InitOptions): Promise<void> {
@@ -16,7 +19,10 @@ export async function runInit(options: InitOptions): Promise<void> {
   // === Step 0: Ensure gitleaks is available (auto-downloads if needed) ===
   const gitleaksBin = await getGitleaksBinary();
 
-  // === Step 1: Scan entire repo for secrets ===
+  // === Step 1: Resolve IDE targets ===
+  const targets = resolveTargets(cwd, options);
+
+  // === Step 2: Scan entire repo for secrets ===
   console.log("");
   console.log("  ◇ Scanning repository for secrets...");
   const tier1Findings = await scanDir(cwd);
@@ -65,47 +71,58 @@ export async function runInit(options: InitOptions): Promise<void> {
     console.log(boxBottom());
   }
 
-  // === Step 2: Save blocklist ===
-  const settingsDir = join(cwd, ".claude");
-  mkdirSync(settingsDir, { recursive: true });
+  // === Step 3: Save blocklist (shared, IDE-neutral) ===
+  migrateBlocklistIfNeeded(cwd);
+  mkdirSync(join(cwd, ".agentmask"), { recursive: true });
   saveBlocklist(cwd, blocklist);
 
-  // === Step 3: Install hooks ===
+  // === Step 4: Install for each IDE target ===
   const binPath = getAgentmaskBinPath();
-  const settingsFile = options.team
-    ? join(settingsDir, "settings.json")
-    : join(settingsDir, "settings.local.json");
+  const installedIdes: string[] = [];
 
-  const settings = loadJSON(settingsFile);
-  settings.hooks = mergeHooks(settings.hooks ?? {}, binPath);
-  writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + "\n");
+  for (const target of targets) {
+    const settingsDir = join(cwd, target.settingsDir);
+    mkdirSync(settingsDir, { recursive: true });
 
-  // === Step 4: Install rules ===
-  const rulesDir = join(settingsDir, "rules");
-  mkdirSync(rulesDir, { recursive: true });
-  writeFileSync(join(rulesDir, "agentmask.md"), RULES_CONTENT);
+    // Hooks
+    target.installHooks(cwd, binPath, options.team ?? false);
 
-  // === Step 5: Register MCP server ===
-  const mcpFile = join(cwd, ".mcp.json");
-  const mcpConfig = loadJSON(mcpFile);
-  mcpConfig.mcpServers = mcpConfig.mcpServers ?? {};
-  mcpConfig.mcpServers.agentmask = {
-    command: binPath,
-    args: ["serve"],
-  };
-  writeFileSync(mcpFile, JSON.stringify(mcpConfig, null, 2) + "\n");
+    // Rules
+    const rulesDir = join(settingsDir, "rules");
+    mkdirSync(rulesDir, { recursive: true });
+    writeFileSync(
+      join(settingsDir, target.rulesRelPath),
+      target.formatRules(RULES_CONTENT),
+    );
+
+    // MCP
+    const mcpFile = join(cwd, target.mcpConfigPath);
+    mkdirSync(join(cwd, target.mcpConfigPath, ".."), { recursive: true });
+    const mcpConfig = loadJSON(mcpFile);
+    mcpConfig.mcpServers = mcpConfig.mcpServers ?? {};
+    mcpConfig.mcpServers.agentmask = { command: binPath, args: ["serve"] };
+    writeFileSync(mcpFile, JSON.stringify(mcpConfig, null, 2) + "\n");
+
+    installedIdes.push(target.displayName);
+  }
 
   // === Summary ===
   const totalProtected = blocklistEntryCount + staticBlocked.length;
-  const settingsRelPath = options.team ? ".claude/settings.json" : ".claude/settings.local.json";
+  const hookPaths = targets.map((t) => getHookDisplayPath(t, options.team ?? false)).join(", ");
+  const rulesPaths = targets.map((t) => `${t.settingsDir}/${t.rulesRelPath}`).join(", ");
+  const mcpPaths = targets.map((t) => t.mcpConfigPath).join(", ");
+
   console.log("");
-  console.log(boxTop("Installed"));
+  console.log(boxTop(`Installed ── ${installedIdes.join(" + ")}`));
   console.log(boxEmpty());
-  console.log(boxLine(`✔ Hooks       ${settingsRelPath}`));
-  console.log(boxLine(`✔ Rules       .claude/rules/agentmask.md`));
-  console.log(boxLine(`✔ MCP         .mcp.json`));
+  console.log(boxLine(`✔ Hooks       ${hookPaths}`));
+  console.log(boxLine(`✔ Rules       ${rulesPaths}`));
+  console.log(boxLine(`✔ MCP         ${mcpPaths}`));
   if (blocklistEntryCount > 0) {
     console.log(boxLine(`✔ Blocklist   ${plural(blocklistEntryCount, "file")}`));
+  }
+  if (options.team && targets.some((t) => t.name === "cursor")) {
+    console.log(boxLine(`  (Cursor hooks are always shared)`));
   }
   console.log(boxEmpty());
   console.log(boxLine(`${plural(totalProtected, "file")} protected · agentmask is active`));
@@ -113,6 +130,13 @@ export async function runInit(options: InitOptions): Promise<void> {
   console.log(boxBottom());
   console.log("");
   console.log("  Re-run `agentmask init` to rescan.");
+}
+
+function getHookDisplayPath(target: IdeTarget, team: boolean): string {
+  if (target.name === "claude") {
+    return team ? ".claude/settings.json" : ".claude/settings.local.json";
+  }
+  return ".cursor/hooks.json";
 }
 
 function buildBlocklist(
@@ -168,48 +192,6 @@ function getAgentmaskBinPath(): string {
   return "npx agentmask";
 }
 
-function mergeHooks(
-  existing: Record<string, unknown>,
-  binPath: string,
-): Record<string, unknown> {
-  const preToolUse = (existing.PreToolUse as unknown[]) ?? [];
-  const postToolUse = (existing.PostToolUse as unknown[]) ?? [];
-
-  const cleanPre = filterOutAgentmask(preToolUse);
-  const cleanPost = filterOutAgentmask(postToolUse);
-
-  return {
-    ...existing,
-    PreToolUse: [
-      ...cleanPre,
-      { matcher: "Read", hooks: [{ type: "command", command: `${binPath} hook pre-read`, timeout: 5 }] },
-      { matcher: "Bash", hooks: [{ type: "command", command: `${binPath} hook pre-bash`, timeout: 5 }] },
-      { matcher: "Write|Edit", hooks: [{ type: "command", command: `${binPath} hook pre-write`, timeout: 5 }] },
-    ],
-    PostToolUse: [
-      ...cleanPost,
-      { matcher: "Read|Bash", hooks: [{ type: "command", command: `${binPath} hook post-scan`, timeout: 5 }] },
-    ],
-  };
-}
-
-function filterOutAgentmask(hooks: unknown[]): unknown[] {
-  return hooks.filter((h: any) => {
-    const innerHooks = h?.hooks ?? [];
-    return !innerHooks.some((ih: any) =>
-      typeof ih?.command === "string" && ih.command.includes("agentmask"),
-    );
-  });
-}
-
-function loadJSON(filePath: string): Record<string, any> {
-  try {
-    return JSON.parse(readFileSync(filePath, "utf-8"));
-  } catch {
-    return {};
-  }
-}
-
 // ── Box drawing helpers ──
 
 const BOX_WIDTH = 72;
@@ -247,38 +229,3 @@ function boxEmpty(): string {
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
-
-const RULES_CONTENT = `## agentmask — Secrets Protection Rules
-
-These rules are enforced by agentmask hooks. Follow them to avoid
-blocked operations and protect user secrets.
-
-### Reading Sensitive Files
-- When you need to read files that may contain secrets (.env,
-  credentials.json, *.pem, *.key, etc.), use the
-  \`mcp__agentmask__safe_read\` tool instead of the built-in Read tool.
-- If a Read operation is blocked with a secrets warning, do NOT retry
-  the Read. Use \`mcp__agentmask__safe_read\` to get a redacted view.
-- To see what environment variables are defined without their values,
-  use \`mcp__agentmask__env_names\`.
-
-### Writing Code
-- Never hardcode secret values (API keys, tokens, passwords,
-  connection strings) in source code. Use environment variable
-  references: process.env.VAR_NAME, os.environ["VAR_NAME"], etc.
-- If a Write/Edit is blocked for containing a secret, rewrite the
-  code to use environment variable references.
-
-### Committing Code
-- Before any git commit, run \`mcp__agentmask__scan_staged\` to verify
-  no secrets are in staged files.
-- If a git commit is blocked for containing secrets, fix the flagged
-  files first, then retry the commit.
-
-### General
-- Never output raw secret values in your responses. Reference secrets
-  by their variable name only (e.g., "your DATABASE_URL" not the
-  actual connection string).
-- When you see a [REDACTED:...] placeholder, do not attempt to
-  discover the actual value. Work with the variable name.
-`;

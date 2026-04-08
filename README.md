@@ -3,10 +3,10 @@
 Secrets never enter context. AI never misses a beat.
 
 <p align="center">
-  <img src="agentmask.gif" alt="agentmask demo" width="720" />
+  <img src="https://raw.githubusercontent.com/adithyan-ak/agentmask/main/agentmask.gif" alt="agentmask demo" width="720" />
 </p>
 
-agentmask prevents Claude Code (and other AI coding assistants) from reading, leaking, or committing your secrets. It works through three reinforcing layers:
+agentmask prevents Claude Code, Cursor, and other AI coding assistants from reading, leaking, or committing your secrets. It works through three reinforcing layers:
 
 1. **Block** — Hooks that prevent secret files from being read and secret values from being written
 2. **Redirect** — An MCP server that provides redacted file access so the agent can still work
@@ -20,7 +20,9 @@ cd your-project
 agentmask init
 ```
 
-`init` scans your entire repository for secrets, builds a blocklist of every file containing them, and installs hooks + MCP server + behavioral rules. Secrets are blocked before they ever enter the AI's context.
+`init` scans your entire repository for secrets, builds a blocklist of every file containing them, and installs hooks + MCP server + behavioral rules for all detected IDEs. Secrets are blocked before they ever enter the AI's context.
+
+agentmask auto-detects which IDEs are present (Claude Code, Cursor) and configures both. Use `--claude` or `--cursor` to target a specific IDE.
 
 ## What It Does
 
@@ -40,17 +42,22 @@ agentmask init
 agentmask init
     │
     ├── Scans entire repo for secrets (gitleaks 150+ rules + agentmask rules)
-    ├── .claude/agentmask-blocklist.json  ← files containing detected secrets
-    ├── .claude/settings.local.json       ← PreToolUse + PostToolUse hooks
-    ├── .claude/rules/agentmask.md        ← behavioral rules for Claude
-    └── .mcp.json                         ← MCP server registration
+    ├── .agentmask/blocklist.json          ← files containing detected secrets (shared)
+    ├── .claude/settings.local.json        ← Claude Code hooks
+    ├── .cursor/hooks.json                 ← Cursor hooks
+    ├── .claude/rules/agentmask.md         ← behavioral rules (Claude)
+    ├── .cursor/rules/agentmask.mdc        ← behavioral rules (Cursor)
+    ├── .mcp.json                          ← MCP server (Claude)
+    └── .cursor/mcp.json                   ← MCP server (Cursor)
 ```
 
+Only files for detected IDEs are created. The blocklist is shared.
+
 **Layer 1 — Block (Hooks):**
-PreToolUse hooks intercept every Read, Bash, Write, and Edit call. Pre-read checks two things: static file patterns (`.env`, `*.pem`, etc.) and the dynamic blocklist (files where secrets were found by the init scan or by post-scan at runtime). If matched, the operation is blocked and Claude receives guidance to use `safe_read`.
+PreToolUse hooks intercept every Read, Bash/Shell, Write, and Edit call. Pre-read checks two things: static file patterns (`.env`, `*.pem`, etc.) and the dynamic blocklist (files where secrets were found by the init scan or by post-scan at runtime). If matched, the operation is blocked and the agent receives guidance to use `safe_read`.
 
 **Layer 2 — Redirect (MCP Server):**
-When a read is blocked, Claude is directed to the `safe_read` MCP tool, which returns the file content with secrets replaced:
+When a read is blocked, the agent is directed to the `safe_read` MCP tool, which returns the file content with secrets replaced:
 
 ```
 DATABASE_URL=[REDACTED:generic-api-key]
@@ -60,11 +67,11 @@ PORT=3000           ← non-secret values kept as-is
 ```
 
 **Layer 3 — Instruct (Rules):**
-A `.claude/rules/agentmask.md` file teaches Claude to prefer safe tools and never output raw secret values.
+Behavioral rules teach the agent to prefer safe tools and never output raw secret values. Installed at `.claude/rules/agentmask.md` and `.cursor/rules/agentmask.mdc`.
 
 ## The Blocklist
 
-The blocklist (`.claude/agentmask-blocklist.json`) is the key to blocking secrets before they enter context:
+The blocklist (`.agentmask/blocklist.json`) is the key to blocking secrets before they enter context:
 
 - **Built at init time** — `agentmask init` scans every file in the repo using gitleaks (150+ provider-specific rules) plus agentmask's own scanner (password fields, connection strings, and provider prefixes gitleaks misses)
 - **Updated at runtime** — if post-scan detects a secret in a file that wasn't in the blocklist, it's added automatically
@@ -93,9 +100,12 @@ The agentmask scanner runs automatically alongside every gitleaks scan — no fl
 ## Commands
 
 ```bash
-agentmask init              # Scan repo, build blocklist, install hooks + MCP + rules
-agentmask init --team       # Write to shared .claude/settings.json (committed to git)
+agentmask init              # Scan repo, build blocklist, install for all detected IDEs
+agentmask init --team       # Write to shared team settings (committed to git)
+agentmask init --cursor     # Install for Cursor only
+agentmask init --claude     # Install for Claude Code only
 agentmask remove            # Remove everything cleanly (hooks, rules, MCP, blocklist)
+agentmask remove --cursor   # Remove from Cursor only
 agentmask scan [path]       # Scan files for secrets (report only)
 agentmask scan --staged     # Scan git staged files
 agentmask scan --json       # JSON output for CI/CD

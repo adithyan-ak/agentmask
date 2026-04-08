@@ -39,7 +39,7 @@ function hookCall(
 describe("Blocklist module", () => {
   beforeEach(() => {
     rmSync(TEST_DIR, { recursive: true, force: true });
-    mkdirSync(join(TEST_DIR, ".claude"), { recursive: true });
+    mkdirSync(join(TEST_DIR, ".agentmask"), { recursive: true });
   });
 
   afterEach(() => {
@@ -157,7 +157,7 @@ describe("Init scan + blocklist integration", () => {
 describe("Post-scan auto-blocklist", () => {
   beforeEach(() => {
     rmSync(TEST_DIR, { recursive: true, force: true });
-    mkdirSync(join(TEST_DIR, ".claude"), { recursive: true });
+    mkdirSync(join(TEST_DIR, ".agentmask"), { recursive: true });
   });
 
   afterEach(() => {

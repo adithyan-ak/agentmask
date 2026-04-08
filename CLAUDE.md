@@ -2,20 +2,21 @@
 
 ## What This Is
 
-agentmask is an open-source secrets firewall for AI coding agents. It prevents Claude Code (and eventually other AI assistants) from reading, leaking, or committing secrets like API keys, tokens, passwords, and connection strings.
+agentmask is an open-source secrets firewall for AI coding agents. It prevents Claude Code, Cursor, and other AI assistants from reading, leaking, or committing secrets like API keys, tokens, passwords, and connection strings.
 
-**agentmask's value is the Claude Code integration layer** — hooks, blocklist, MCP server, behavioral rules. Primary detection is delegated to [gitleaks](https://github.com/gitleaks/gitleaks) (150+ battle-tested rules). An **agentmask scanner** (`src/scanner/tier2.ts`) runs as a second pass to catch patterns gitleaks's `generic-api-key` rule deliberately excludes: `password`/`passwd`/`pwd` field assignments, connection strings with embedded credentials, and provider prefixes without dedicated gitleaks rules (`whsec_`, `GOCSPX-`).
+**agentmask's value is the IDE integration layer** — hooks, blocklist, MCP server, behavioral rules. Currently supports Claude Code and Cursor with auto-detection. Primary detection is delegated to [gitleaks](https://github.com/gitleaks/gitleaks) (150+ battle-tested rules). An **agentmask scanner** (`src/scanner/tier2.ts`) runs as a second pass to catch patterns gitleaks's `generic-api-key` rule deliberately excludes: `password`/`passwd`/`pwd` field assignments, connection strings with embedded credentials, and provider prefixes without dedicated gitleaks rules (`whsec_`, `GOCSPX-`).
 
 ## Architecture
 
 ```
-agentmask = Claude Code integration layer
+agentmask = IDE integration layer (Claude Code + Cursor)
   ├── Scanner backend: gitleaks (150+ rules, auto-downloaded if not installed)
   ├── agentmask scanner: complementary TS regex pass (password fields, conn strings, whsec_, GOCSPX-)
-  ├── Blocklist manager (built by merged gitleaks + agentmask findings, queried by hooks)
-  ├── Hooks (pre-read, pre-write, pre-bash, post-scan)
+  ├── Blocklist manager (.agentmask/blocklist.json, shared between IDEs)
+  ├── IDE adapters (src/ide/targets.ts — hook format, rules format, config paths per IDE)
+  ├── Hooks (pre-read, pre-write, pre-bash, post-scan) with --format adapter
   ├── MCP server (safe_read, env_names, scan_file, scan_staged)
-  └── Behavioral rules (.claude/rules/agentmask.md)
+  └── Behavioral rules (per-IDE: .claude/rules/*.md, .cursor/rules/*.mdc)
 ```
 
 ### Three Reinforcing Layers
@@ -39,7 +40,7 @@ Layer 3: INSTRUCT (.claude/rules/agentmask.md)
 
 ## The Blocklist System
 
-The key innovation is the **dynamic blocklist** (`.claude/agentmask-blocklist.json`):
+The key innovation is the **dynamic blocklist** (`.agentmask/blocklist.json`):
 
 1. `agentmask init` runs `gitleaks dir .` on the entire repo, then runs the agentmask scanner on the same tree, and merges the findings
 2. Every file containing a detected secret (from either scanner) is added to the blocklist
@@ -66,9 +67,11 @@ src/
 ├── scanner/
 │   ├── file-patterns.ts    # Static blocked path globs (.env, *.pem, etc.), binary detection
 │   └── tier2.ts            # agentmask scanner: password fields, conn strings, whsec_, GOCSPX-
+├── ide/
+│   └── targets.ts          # IDE adapters: Claude Code + Cursor (hook format, rules, config paths, detection)
 ├── hooks/
-│   ├── common.ts           # Hook I/O: readStdin, block(), allow(), safety timer
-│   ├── blocklist.ts        # Dynamic blocklist: load, save, query, add, remove
+│   ├── common.ts           # Hook I/O: readStdin, block(), allow(), --format adapter, safety timer
+│   ├── blocklist.ts        # Dynamic blocklist (.agentmask/blocklist.json): load, save, query, migrate
 │   ├── pre-read.ts         # Static patterns + blocklist lookup → block or allow (no subprocess)
 │   ├── pre-bash.ts         # Command pattern match + gitleaks scanStaged on git commit
 │   ├── pre-write.ts        # gitleaks + agentmask scanContent on content being written
@@ -174,7 +177,7 @@ stopwords = ["EXAMPLE_KEY"]
 
 ## What's NOT Built Yet
 
-- Cursor / Copilot / other IDE support
+- Copilot / Windsurf / other IDE support
 - CI/CD GitHub Actions workflow
 - npm publish automation
 - SessionStart hook to auto-rescan on new sessions

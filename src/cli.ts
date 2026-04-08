@@ -29,16 +29,20 @@ program
 program
   .command("init")
   .description("Install agentmask hooks and MCP server in the current project")
-  .option("--team", "Write to shared .claude/settings.json instead of local")
-  .action(async (options: { team?: boolean }) => {
+  .option("--team", "Write to shared team settings instead of local")
+  .option("--claude", "Install for Claude Code only")
+  .option("--cursor", "Install for Cursor only")
+  .action(async (options: { team?: boolean; claude?: boolean; cursor?: boolean }) => {
     await runInit(options);
   });
 
 program
   .command("remove")
   .description("Remove agentmask hooks, rules, and MCP registration")
-  .action(async () => {
-    await runRemove();
+  .option("--claude", "Remove from Claude Code only")
+  .option("--cursor", "Remove from Cursor only")
+  .action(async (options: { claude?: boolean; cursor?: boolean }) => {
+    await runRemove(options);
   });
 
 program
@@ -55,10 +59,11 @@ program
     await runAllowValue(value);
   });
 
-// Hook dispatch — called by Claude Code hooks
+// Hook dispatch — called by IDE hooks
 program
   .command("hook <type>")
-  .description("Internal: handle a Claude Code hook event")
+  .description("Internal: handle an IDE hook event")
+  .option("--format <type>", "Hook I/O format (claude or cursor)", "claude")
   .action(async (type: string) => {
     // Dynamic import to keep CLI startup fast for non-hook commands
     switch (type) {

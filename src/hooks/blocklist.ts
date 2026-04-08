@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, renameSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 
 /**
@@ -7,6 +7,8 @@ import { join, dirname, resolve } from "node:path";
  * Built at init time by scanning the entire repo (gitleaks + agentmask).
  * Updated at runtime by post-scan when secrets are found in new files.
  * Checked by pre-read to block files before they enter context.
+ *
+ * Stored at .agentmask/blocklist.json (shared between IDEs).
  */
 
 export interface BlocklistEntry {
@@ -19,10 +21,24 @@ export interface BlocklistData {
   files: Record<string, BlocklistEntry>;
 }
 
-const BLOCKLIST_FILENAME = "agentmask-blocklist.json";
+const BLOCKLIST_FILENAME = "blocklist.json";
+const LEGACY_BLOCKLIST_PATH = ".claude/agentmask-blocklist.json";
 
 export function getBlocklistPath(cwd: string): string {
-  return join(cwd, ".claude", BLOCKLIST_FILENAME);
+  return join(cwd, ".agentmask", BLOCKLIST_FILENAME);
+}
+
+/**
+ * Migrate blocklist from legacy .claude/ path to .agentmask/.
+ * Called by init before saving a new blocklist.
+ */
+export function migrateBlocklistIfNeeded(cwd: string): void {
+  const oldPath = join(cwd, LEGACY_BLOCKLIST_PATH);
+  const newPath = getBlocklistPath(cwd);
+  if (existsSync(oldPath) && !existsSync(newPath)) {
+    mkdirSync(dirname(newPath), { recursive: true });
+    renameSync(oldPath, newPath);
+  }
 }
 
 export function loadBlocklist(cwd: string): BlocklistData {
@@ -30,6 +46,11 @@ export function loadBlocklist(cwd: string): BlocklistData {
   try {
     if (existsSync(filePath)) {
       return JSON.parse(readFileSync(filePath, "utf-8"));
+    }
+    // Fallback: check legacy path for users who haven't re-run init
+    const legacyPath = join(cwd, LEGACY_BLOCKLIST_PATH);
+    if (existsSync(legacyPath)) {
+      return JSON.parse(readFileSync(legacyPath, "utf-8"));
     }
   } catch {
     // Corrupted — start fresh
@@ -152,13 +173,19 @@ export function removeFromBlocklist(filePath: string, cwd: string): boolean {
 }
 
 /**
- * Delete the blocklist file entirely.
+ * Delete the blocklist file entirely (both new and legacy paths).
  */
 export function deleteBlocklist(cwd: string): boolean {
+  let deleted = false;
   const filePath = getBlocklistPath(cwd);
   if (existsSync(filePath)) {
     unlinkSync(filePath);
-    return true;
+    deleted = true;
   }
-  return false;
+  const legacyPath = join(cwd, LEGACY_BLOCKLIST_PATH);
+  if (existsSync(legacyPath)) {
+    unlinkSync(legacyPath);
+    deleted = true;
+  }
+  return deleted;
 }
